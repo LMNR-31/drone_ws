@@ -1,0 +1,279 @@
+<?xml version="1.0"? encoding="utf-8">
+<sdf version="1.10">
+
+{%- import 'mrs_robots_description/sdf/components/generic_components.sdf.jinja' as generic -%}
+
+
+{# !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! #}
+{# !! THIS DOCUMENT CONTAINS ONLY COMPLEX COMPONENT MACROS DESIGNED !! #}
+{# !!   FOR USE WITH THE MRS DRONE SPAWNER AND USE THE SPAWNER API  !! #}
+{# !! GENERIC SENSORS, VISUAL BLOCKS, PLUGINS ETC BELONG TO GENERIC !! #}
+{# !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! #}
+
+<!-- License {-->
+<!--
+Copyright 2015 Fadri Furrer, ASL, ETH Zurich, Switzerland
+Copyright 2015 Michael Burri, ASL, ETH Zurich, Switzerland
+Copyright 2015 Mina Kamel, ASL, ETH Zurich, Switzerland
+Copyright 2015 Janosch Nikolic, ASL, ETH Zurich, Switzerland
+Copyright 2015 Markus Achtelik, ASL, ETH Zurich, Switzerland
+Copyright 2024 Petr Stibinger, MRS, CTU Prague, Czech Republic
+Copyright 2025 Vojtech Spurny, MRS, CTU Prague, Czech Republic
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+<!--}-->
+
+{# ================================================================== #}
+{# ||                   Components using spawner API               || #}
+{# ================================================================== #}
+
+{# ground_truth_macro {--> #}
+{%- macro ground_truth_macro(parent_link, x, y, z, roll, pitch, yaw, spawner_args) -%}
+
+  {%- set spawner_keyword = 'enable-ground-truth' -%}
+  {%- set spawner_description = 'Enable ROS topic with ground truth odometry published under model namespace' -%}
+  {%- set spawner_default_args = {'topic_name': 'ground_truth', 'frame_name': 'world', 'update_rate': 150, 'noise' : 0} -%}
+
+  {%- if spawner_keyword in spawner_args.keys() -%}
+    {{ generic.handle_spawner_args(spawner_keyword, spawner_default_args, spawner_args) }}
+    
+ 
+    {%- set world_frame_name = spawner_args[spawner_keyword]['frame_name'] -%}
+    {%- set robot_base_frame = parent_link -%}
+    {%- set topic_name = spawner_args['name'] + '/' + spawner_args[spawner_keyword]['topic_name']-%}
+    {%- set update_rate = spawner_args[spawner_keyword]['update_rate'] -%}
+    {%- set noise = spawner_args[spawner_keyword]['noise'] -%}
+
+    <plugin filename="gz-sim-odometry-publisher-system" name="gz::sim::systems::OdometryPublisher">
+      <odom_frame>{{ world_frame_name }}</odom_frame>
+      <robot_base_frame>{{ robot_base_frame }}</robot_base_frame>
+      <odom_publish_frequency>{{ update_rate }}</odom_publish_frequency>
+      <odom_topic>{{ topic_name }}</odom_topic>
+      <odom_covariance_topic>{{ topic_name }}_with_covariance</odom_covariance_topic> 
+      <tf_topic>{{ topic_name }}/pose</tf_topic>
+      <dimensions>3</dimensions>
+      <xyz_offset>{{ x }} {{ y }} {{ z }}</xyz_offset>
+      <rpy_offset>{{ roll }} {{ pitch }} {{ yaw }}</rpy_offset>
+      <gaussian_noise>{{ noise }}</gaussian_noise>
+    </plugin>
+    <!--}-->
+
+  {%- endif -%}
+
+{%- endmacro -%}
+{# <!--}--> #}
+
+{# propellers_macro {--> #}
+{%- macro propellers_macro(prop_list, rotor_velocity_slowdown_sim, motor_constant, moment_constant, parent, mass, radius, time_constant_up, time_constant_down, max_rot_velocity, rotor_drag_coefficient, rolling_moment_coefficient, meshes_z_offset, use_mrs_plugin, prop_ixx, prop_ixy, prop_ixz, prop_iyy, prop_iyz, prop_izz, spawner_args) -%}
+
+  {{ generic.handle_spawner_args(spawner_keyword, spawner_default_args, spawner_args) }}
+
+  <!-- Propellers {-->
+  {%- for prop_params in prop_list -%}
+
+    {%- if prop_params['mesh_files'] | length == 1 -%}
+      <!-- Propeller {{ prop_params['motor_number'] }} {-->
+      {{ generic.prop_macro(
+        direction = prop_params['direction'],
+        rotor_velocity_slowdown_sim = rotor_velocity_slowdown_sim,
+        motor_constant = motor_constant,
+        moment_constant = moment_constant,
+        parent = parent,
+        mass = mass,
+        radius = radius,
+        time_constant_up = time_constant_up,
+        time_constant_down = time_constant_down,
+        max_rot_velocity = max_rot_velocity,
+        motor_number = prop_params['motor_number'],
+        rotor_drag_coefficient = rotor_drag_coefficient,
+        rolling_moment_coefficient = rolling_moment_coefficient,
+        color = prop_params['color'],
+        mesh_file = prop_params['mesh_files'][0],
+        mesh_scale = prop_params['mesh_scale'],
+        x = prop_params['x'],
+        y = prop_params['y'],
+        z = prop_params['z'],
+        roll = 0,
+        pitch = 0,
+        yaw = 0,
+        ixx = prop_ixx,
+        ixy = prop_ixy,
+        ixz = prop_ixz,
+        iyy = prop_iyy,
+        iyz = prop_iyz,
+        izz = prop_izz,
+        robot_namespace = spawner_args['name'])
+      }}
+      <!--}-->
+    {%- elif prop_params['mesh_files'] | length == 2 -%}
+      <!-- Propeller {{ prop_params['motor_number'] }} {-->
+      {{ generic.prop_macro_2_meshes(
+        direction = prop_params['direction'],
+        rotor_velocity_slowdown_sim = rotor_velocity_slowdown_sim,
+        motor_constant = motor_constant,
+        moment_constant = moment_constant,
+        parent = parent,
+        mass = mass,
+        radius = radius,
+        time_constant_up = time_constant_up,
+        time_constant_down = time_constant_down,
+        max_rot_velocity = max_rot_velocity,
+        motor_number = prop_params['motor_number'],
+        rotor_drag_coefficient = rotor_drag_coefficient,
+        rolling_moment_coefficient = rolling_moment_coefficient,
+        color = prop_params['color'],
+        mesh_file_1 = prop_params['mesh_files'][0],
+        mesh_file_2 = prop_params['mesh_files'][1],
+        meshes_z_offset = meshes_z_offset,
+        mesh_scale = prop_params['mesh_scale'],
+        x = prop_params['x'],
+        y = prop_params['y'],
+        z = prop_params['z'],
+        roll = 0,
+        pitch = 0,
+        yaw = 0,
+        ixx = prop_ixx,
+        ixy = prop_ixy,
+        ixz = prop_ixz,
+        iyy = prop_iyy,
+        iyz = prop_iyz,
+        izz = prop_izz,
+        robot_namespace = spawner_args['name'])
+      }}
+      <!--}-->
+    {%- endif -%}
+
+  {%- endfor -%}
+  <!--}-->
+
+{%- endmacro -%}
+{# <!--}--> #}
+
+
+{# ======================= rangefinder sensors ====================== #}
+{# ==== Garmin ==== #}
+{%- import "mrs_robots_description/sdf/components/rangefinder/garmin/garmin_down_pixhawk.sdf.jinja" as garmin_rangefinder_pixhawk -%}
+{%- macro garmin_down_macro(parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) -%}
+  {{ garmin_rangefinder_pixhawk.garmin_down_macro(parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) }}
+{%- endmacro -%}
+
+{%- import "mrs_robots_description/sdf/components/rangefinder/garmin/garmin_down_external.sdf.jinja" as garmin_rangefinder_down_external -%}
+{%- macro garmin_down_external_macro(parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) -%}
+  {{ garmin_rangefinder_down_external.garmin_down_external_macro(parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args)}}
+{%- endmacro -%}
+
+{%- import "mrs_robots_description/sdf/components/rangefinder/garmin/garmin_up_external.sdf.jinja" as garmin_rangefinder_up_external -%}
+{%- macro garmin_up_external_macro(parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) -%}
+  {{ garmin_rangefinder_up_external.garmin_up_external_macro(parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) }}
+{%- endmacro -%}
+
+
+{# ========================== 2D LIDAR sensors ========================= #}
+{# ==== RP lidar ==== #}
+{%- import "mrs_robots_description/sdf/components/lidar/rplidar/rplidar.sdf.jinja" as rplidar_lidar -%}
+{%- macro rplidar_macro(parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) -%}
+  {{ rplidar_lidar.rplidar_macro(parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) }}
+{%- endmacro -%}
+
+
+{# ==== Scance Sweep lidar ==== #}
+{%- import "mrs_robots_description/sdf/components/lidar/scanse_sweep/scanse_sweep.sdf.jinja" as scanse_sweep_lidar -%}
+{%- macro scanse_sweep_macro(parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) -%}
+  {{ scanse_sweep_lidar.scanse_sweep_macro(parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) }}
+{%- endmacro -%}
+
+
+{# ========================== 3D LIDAR sensors ========================= #}
+{# ==== Ouster lidar ==== #}
+{%- import "mrs_robots_description/sdf/components/lidar/ouster/ouster.sdf.jinja" as ouster_lidar -%}
+{%- macro ouster_macro(parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) -%}
+  {{ ouster_lidar.ouster_macro(parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) }}
+{%- endmacro -%}
+
+{# ==== Velodyne lidar ==== #}
+{%- import "mrs_robots_description/sdf/components/lidar/velodyne/velodyne.sdf.jinja" as velodyne_lidar -%}
+{%- macro velodyne_macro(parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) -%}
+  {{ velodyne_lidar.velodyne_macro(parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) }}
+{%- endmacro -%}
+
+
+{# ============================= Cameras ============================ #}
+{# ==== Bluefox camera ==== #}
+{%- import "mrs_robots_description/sdf/components/camera/bluefox/bluefox.sdf.jinja" as bluefox_macros -%}
+{%- macro bluefox_camera_down_macro(camera_name, parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) -%}
+  {{ bluefox_macros.bluefox_camera_down_macro(camera_name, parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) }}
+{%- endmacro -%}
+
+{%- macro bluefox_camera_front_macro(camera_name, parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) -%}
+  {{ bluefox_macros.bluefox_camera_front_macro(camera_name, parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) }}
+{%- endmacro -%}
+
+{%- macro bluefox_camera_reverse_macro(camera_name, parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) -%}
+  {{ bluefox_macros.bluefox_camera_reverse_macro(camera_name, parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) }}
+{%- endmacro -%}
+
+{# ==== Mobius camera ==== #}
+{%- import "mrs_robots_description/sdf/components/camera/mobius/mobius.sdf.jinja" as mobius_macros -%}
+{%- macro mobius_camera_front_macro(camera_name, parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) -%}
+  {{ mobius_macros.mobius_camera_front_macro(camera_name, parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) }}
+{%- endmacro -%}
+
+{%- macro mobius_camera_down_macro(camera_name, parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) -%}
+  {{ mobius_macros.mobius_camera_down_macro(camera_name, parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) }}
+{%- endmacro -%}
+
+
+{# ============================= Depth cameras ============================ #}
+{# Note: All of these cameras have misaligned point clouds. We are waiting for a fix. #}
+
+{# ==== Realsense camera example ==== #}
+{%- import "mrs_robots_description/sdf/components/camera/realsense/realsense_depth_only.sdf.jinja" as realsense_depth_macros -%}
+{%- macro realsense_depth_macro(camera_name, parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) -%}
+  {{ realsense_depth_macros.realsense_depth_macro(camera_name, parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) }}
+{%- endmacro -%}
+
+
+{# ============================= RGB-D cameras ============================ #}
+{# Note: All of these cameras have misaligned point clouds. We are waiting for a fix. #}
+
+{# ==== Realsense camera ==== #}
+
+{# NOTE: unused - single plugin does not permit different settings for RGB and for Depth
+{%- import "mrs_robots_description/sdf/components/camera/realsense/realsense_rgbd_single_plugin.sdf.jinja" as realsense_camera_top -%}
+{%- macro realsense_rgbd_single_plugin_front_macro(camera_name, parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) -%}
+  {{ realsense_camera_top.realsense_rgbd_single_plugin_front_macro(camera_name, parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) }}
+{%- endmacro -%}
+#}
+
+{%- import "mrs_robots_description/sdf/components/camera/realsense/realsense_rgb_plus_depth.sdf.jinja" as realsense_macros -%}
+{%- macro realsense_front_macro(camera_name, parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) -%}
+  {{ realsense_macros.realsense_front_macro(camera_name, parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) }}
+{%- endmacro -%}
+
+{%- macro realsense_up_macro(camera_name, parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) -%}
+  {{ realsense_macros.realsense_up_macro(camera_name, parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) }}
+{%- endmacro -%}
+
+{%- macro realsense_down_macro(camera_name, parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) -%}
+  {{ realsense_macros.realsense_down_macro(camera_name, parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) }}
+{%- endmacro -%}
+
+{%- macro realsense_front_pitched_macro(camera_name, parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) -%}
+  {{ realsense_macros.realsense_front_pitched_macro(camera_name, parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) }}
+{%- endmacro -%}
+
+{%- import "mrs_robots_description/sdf/components/camera/oak/oak_d.sdf.jinja" as oak_d -%}
+{%- macro oak_d_macro(camera_name, parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) -%}
+  {{ oak_d.oak_d_macro(camera_name, parent_link, x, y, z, roll, pitch, yaw, mount, spawner_args) }}
+{%- endmacro -%}

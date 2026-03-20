@@ -1,0 +1,550 @@
+<?xml version='1.0' encoding='utf-8'?>
+<robot name="arena_2025_desenho">
+    <link name="base_link">
+        <inertial>
+            <origin xyz="2.151406390492371 3.959566257292806 0.049933093325697585" rpy="0.0 0.0 0.0" />
+            <mass value="50179.96518754694" />
+            <inertia ixx="267648.59232663387" iyy="267613.65854371735" izz="535178.8370239404" ixy="184.71112167288084" iyz="-3.373729939756231" ixz="-4.027221266111155" />
+        </inertial>
+        <visual name="base_link_visual">
+            <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/base_link.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </visual>
+        <collision name="base_link_collision">
+            <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/base_link.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </collision>
+    </link>
+    <link name="parede1">
+        <inertial>
+            <origin xyz="2.500151304242571 0.0 0.00020728681232221825" rpy="0.0 -0.0 0.0" />
+            <mass value="32426.387499999997" />
+            <inertia ixx="177356.0474374378" iyy="70303.20121853892" izz="247605.20746339276" ixy="0.0" iyz="0.0" ixz="0.1236732509223657" />
+        </inertial>
+        <visual name="parede1_visual">
+            <origin xyz="-0.05000000000000005 -4.0 -0.05" rpy="-0.0 1.5707963267948966 0" />
+            <geometry>
+                <mesh filename="meshes/parede1.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </visual>
+        <collision name="parede1_collision">
+            <origin xyz="-0.05000000000000005 -4.0 -0.05" rpy="-0.0 1.5707963267948966 0" />
+            <geometry>
+                <mesh filename="meshes/parede1.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </collision>
+    </link>
+    <link name="parede2">
+        <inertial>
+            <origin xyz="0.0 2.500151304242571 0.00020728681232221825" rpy="0.0 -0.0 0.0" />
+            <mass value="32426.387499999997" />
+            <inertia ixx="70303.20121853892" iyy="177356.0474374378" izz="247605.20746339276" ixy="0.0" iyz="0.1236732509223657" ixz="0.0" />
+        </inertial>
+        <visual name="parede2_visual">
+            <origin xyz="-4.0 -0.05000000000000005 -0.05" rpy="-1.5707963267948966 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/parede2.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </visual>
+        <collision name="parede2_collision">
+            <origin xyz="-4.0 -0.05000000000000005 -0.05" rpy="-1.5707963267948966 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/parede2.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </collision>
+    </link>
+    <link name="parede3">
+        <inertial>
+            <origin xyz="2.500151304242571 -9.999999974752428e-09 0.0002072868123218541" rpy="0.0 -0.0 0.0" />
+            <mass value="32426.387499999997" />
+            <inertia ixx="177356.04743743734" iyy="70303.20121853799" izz="247605.20746339252" ixy="0.0" iyz="2.3283064365386963e-10" ixz="0.12367325101513416" />
+        </inertial>
+        <visual name="parede3_visual">
+            <origin xyz="-0.05000000000000005 3.99999999 -8.05" rpy="-3.141592653589793 -1.5707963267948966 0" />
+            <geometry>
+                <mesh filename="meshes/parede3.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </visual>
+        <collision name="parede3_collision">
+            <origin xyz="-0.05000000000000005 3.99999999 -8.05" rpy="-3.141592653589793 -1.5707963267948966 0" />
+            <geometry>
+                <mesh filename="meshes/parede3.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </collision>
+    </link>
+    <link name="parede4">
+        <inertial>
+            <origin xyz="0.0 -2.500151304242571 0.0002072868123218541" rpy="0.0 -0.0 0.0" />
+            <mass value="32426.387499999997" />
+            <inertia ixx="70303.20121853799" iyy="177356.04743743734" izz="247605.20746339252" ixy="0.0" iyz="-0.12367325101513416" ixz="-2.3283064365386963e-10" />
+        </inertial>
+        <visual name="parede4_visual">
+            <origin xyz="-4.0 0.05000000000000005 -8.05" rpy="1.5707963267948966 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/parede4.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </visual>
+        <collision name="parede4_collision">
+            <origin xyz="-4.0 0.05000000000000005 -8.05" rpy="1.5707963267948966 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/parede4.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </collision>
+    </link>
+    <link name="Takeoff_Baseazul">
+        <inertial>
+            <origin xyz="3.5404745367060284e-05 0.0 0.2487593694653711" rpy="0.0 -0.0 0.0" />
+            <mass value="11715.450790096673" />
+            <inertia ixx="2445.6988516815363" iyy="4153.691922043008" izz="6115.897055282952" ixy="0.0" iyz="0.0" ixz="-0.09768726833226538" />
+        </inertial>
+        <visual name="Takeoff_Baseazul_visual">
+            <origin xyz="-1.0 -0.75 -0.09899999999999977" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/Takeoff_Baseazul.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </visual>
+        <collision name="Takeoff_Baseazul_collision">
+            <origin xyz="-1.0 -0.75 -0.09899999999999977" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/Takeoff_Baseazul.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </collision>
+    </link>
+    <link name="Takeoff_Baseamarelo">
+        <inertial>
+            <origin xyz="-0.004991413908337279 0.0 0.00489669385435775" rpy="0.0 -0.0 0.0" />
+            <mass value="83.09920990333156" />
+            <inertia ixx="8.276902645828471" iyy="20.903622247689754" izz="29.17898468038257" ixy="-1.4210854715202004e-14" iyz="-7.105427357601002e-15" ixz="-0.004820981793479007" />
+        </inertial>
+        <visual name="Takeoff_Baseamarelo_visual">
+            <origin xyz="-1.0 -0.75 -0.5899999999999997" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/Takeoff_Baseamarelo.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </visual>
+        <collision name="Takeoff_Baseamarelo_collision">
+            <origin xyz="-1.0 -0.75 -0.5899999999999997" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/Takeoff_Baseamarelo.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </collision>
+    </link>
+    <link name="casa_paredes">
+        <inertial>
+            <origin xyz="0.03020244236199403 -0.016497457106738125 0.773679421811073" rpy="0.0 -0.0 0.0" />
+            <mass value="3304.9478712202363" />
+            <inertia ixx="2710.2370496198573" iyy="12143.995963199093" izz="13600.09262465265" ixy="87.29446573413043" iyz="42.373173466856315" ixz="20.768977798166816" />
+        </inertial>
+        <visual name="casa_paredes_visual">
+            <origin xyz="-4.988000030000001 -0.99999546 -0.07300000000000006" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/casa_paredes.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </visual>
+        <collision name="casa_paredes_collision">
+            <origin xyz="-4.988000030000001 -0.99999546 -0.07300000000000006" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/casa_paredes.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </collision>
+    </link>
+    <link name="casa_teto">
+        <inertial>
+            <origin xyz="0.012000028397620781 -0.0007485727960292365 -3.841817082559373e-05" rpy="0.0 -0.0 0.0" />
+            <mass value="919.118981303504" />
+            <inertia ixx="300.9132498118288" iyy="2758.070419543641" izz="3058.9685418189547" ixy="-1.401973804604495e-05" iyz="0.0031351931322660676" ixz="1.6749527276260778e-07" />
+        </inertial>
+        <visual name="casa_teto_visual">
+            <origin xyz="-4.9880000299999985 -0.9999954599999994 -1.595" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/casa_teto.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </visual>
+        <collision name="casa_teto_collision">
+            <origin xyz="-4.9880000299999985 -0.9999954599999994 -1.595" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/casa_teto.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </collision>
+    </link>
+    <link name="Landing_Basesazul1">
+        <inertial>
+            <origin xyz="-0.0009511643046478469 3.9790393202565614e-15 0.009892697491582112" rpy="0.0 -0.0 0.0" />
+            <mass value="148.29686817571758" />
+            <inertia ixx="12.128993201864883" iyy="12.076418362125676" izz="24.194660242001646" ixy="1.13686837721616e-13" iyz="5.684341886080801e-14" ixz="0.0005088269301722902" />
+        </inertial>
+        <visual name="Landing_Basesazul1_visual">
+            <origin xyz="-0.9999999999999923 -2.9999999999999756 -0.8289999999850989" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/Landing_Basesazul1.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </visual>
+        <collision name="Landing_Basesazul1_collision">
+            <origin xyz="-0.9999999999999923 -2.9999999999999756 -0.8289999999850989" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/Landing_Basesazul1.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </collision>
+    </link>
+    <link name="Landing_Basesazul2">
+        <inertial>
+            <origin xyz="-0.001004328657008955 4.547473508864641e-15 0.009417676117190582" rpy="0.0 -0.0 0.0" />
+            <mass value="140.44674172669846" />
+            <inertia ixx="11.474084075045539" iyy="11.42150173622349" izz="22.886298334748062" ixy="0.0" iyz="0.0" ixz="0.0004347739619561253" />
+        </inertial>
+        <visual name="Landing_Basesazul2_visual">
+            <origin xyz="-4.499999999999994 -6.49999999999999 -1.0800000160932541" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/Landing_Basesazul2.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </visual>
+        <collision name="Landing_Basesazul2_collision">
+            <origin xyz="-4.499999999999994 -6.49999999999999 -1.0800000160932541" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/Landing_Basesazul2.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </collision>
+    </link>
+    <link name="Landing_Basesazul3">
+        <inertial>
+            <origin xyz="-0.0007849590759346371 1.1368683772161603e-15 0.004725833118343594" rpy="0.0 -0.0 0.0" />
+            <mass value="71.87874722349771" />
+            <inertia ixx="5.896694965139432" iyy="5.8756744068549835" izz="11.771206799937772" ixy="1.1368683772161603e-13" iyz="2.1316282072803006e-14" ixz="0.0001283127595321787" />
+        </inertial>
+        <visual name="Landing_Basesazul3_visual">
+            <origin xyz="-1.5 -6.0 -0.09900000000000006" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/Landing_Basesazul3.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </visual>
+        <collision name="Landing_Basesazul3_collision">
+            <origin xyz="-1.5 -6.0 -0.09900000000000006" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/Landing_Basesazul3.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </collision>
+    </link>
+    <link name="Landing_Basesazul4">
+        <inertial>
+            <origin xyz="-0.001004327753617531 5.684341886080802e-16 0.004708841869615874" rpy="0.0 -0.0 0.0" />
+            <mass value="70.22343402937139" />
+            <inertia ixx="5.7353059009071785" iyy="5.709014731560956" izz="11.443159695098984" ixy="2.2737367544323206e-13" iyz="0.0" ixz="0.00010869378922606643" />
+        </inertial>
+        <visual name="Landing_Basesazul4_visual">
+            <origin xyz="-4.0 -4.5 -0.09900000000000006" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/Landing_Basesazul4.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </visual>
+        <collision name="Landing_Basesazul4_collision">
+            <origin xyz="-4.0 -4.5 -0.09900000000000006" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/Landing_Basesazul4.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </collision>
+    </link>
+    <link name="Landing_Basesazul5">
+        <inertial>
+            <origin xyz="-0.0010043277536180995 0.0 0.004708841869615856" rpy="0.0 -0.0 0.0" />
+            <mass value="70.22343402937142" />
+            <inertia ixx="5.735305900907406" iyy="5.709014731561183" izz="11.443159695122176" ixy="2.2737367544323206e-13" iyz="-3.552713678800501e-15" ixz="0.00010869378923672457" />
+        </inertial>
+        <visual name="Landing_Basesazul5_visual">
+            <origin xyz="-6.999999999999982 -2.999999999999992 -0.09900000000000006" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/Landing_Basesazul5.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </visual>
+        <collision name="Landing_Basesazul5_collision">
+            <origin xyz="-6.999999999999982 -2.999999999999992 -0.09900000000000006" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/Landing_Basesazul5.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </collision>
+    </link>
+    <link name="Landing_Basesazul6">
+        <inertial>
+            <origin xyz="-0.0010043277536192364 0.0 0.004708841869615981" rpy="0.0 -0.0 0.0" />
+            <mass value="70.22343402936932" />
+            <inertia ixx="5.735305900907347" iyy="5.709014731560954" izz="11.443159695100348" ixy="-1.13686837721616e-13" iyz="-2.8421709430404004e-14" ixz="0.00010869378900224545" />
+        </inertial>
+        <visual name="Landing_Basesazul6_visual">
+            <origin xyz="-5.000000000000001 -1.088 -1.5990000000000002" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/Landing_Basesazul6.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </visual>
+        <collision name="Landing_Basesazul6_collision">
+            <origin xyz="-5.000000000000001 -1.088 -1.5990000000000002" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/Landing_Basesazul6.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </collision>
+    </link>
+    <link name="Landing_Basesamarelo_1">
+        <inertial>
+            <origin xyz="0.008521329256636819 3.4106051316484808e-15 0.004940726358097436" rpy="0.0 -0.0 0.0" />
+            <mass value="16.55313194125693" />
+            <inertia ixx="1.6140203534953912" iyy="1.6652590536164666" izz="3.2790036378982563" ixy="2.1316282072803006e-14" iyz="2.842170943040401e-14" ixz="0.0003442758916136768" />
+        </inertial>
+        <visual name="Landing_Basesamarelo_1_visual">
+            <origin xyz="-0.9999999999999883 -2.9999999999999645 -0.8399999999850988" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/Landing_Basesamarelo_1.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </visual>
+        <collision name="Landing_Basesamarelo_1_collision">
+            <origin xyz="-0.9999999999999883 -2.9999999999999645 -0.8399999999850988" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/Landing_Basesamarelo_1.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </collision>
+    </link>
+    <link name="Landing_Basesamarelo_2">
+        <inertial>
+            <origin xyz="0.008521329256636819 2.2737367544323206e-15 0.004940730249941509" rpy="0.0 -0.0 0.0" />
+            <mass value="16.553131941256936" />
+            <inertia ixx="1.6140203534957887" iyy="1.6652590536167504" izz="3.279003637898768" ixy="-1.70530256582424e-13" iyz="1.4210854715202002e-14" ixz="0.00034427589159236044" />
+        </inertial>
+        <visual name="Landing_Basesamarelo_2_visual">
+            <origin xyz="-4.49999999999999 -6.499999999999984 -1.0899999960932543" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/Landing_Basesamarelo_2.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </visual>
+        <collision name="Landing_Basesamarelo_2_collision">
+            <origin xyz="-4.49999999999999 -6.499999999999984 -1.0899999960932543" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/Landing_Basesamarelo_2.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </collision>
+    </link>
+    <link name="Landing_Basesamarelo_3">
+        <inertial>
+            <origin xyz="0.008521329256635965 -1.1368683772161603e-15 0.001976290537278267" rpy="0.0 -0.0 0.0" />
+            <mass value="6.621252776502777" />
+            <inertia ixx="0.6455618121697171" iyy="0.6660572922181043" izz="1.3116014551578985" ixy="-2.1316282072803006e-14" iyz="-1.7763568394002505e-15" ixz="5.508414265742445e-05" />
+        </inertial>
+        <visual name="Landing_Basesamarelo_3_visual">
+            <origin xyz="-1.5 -6.0 -0.10500000000000005" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/Landing_Basesamarelo_3.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </visual>
+        <collision name="Landing_Basesamarelo_3_collision">
+            <origin xyz="-1.5 -6.0 -0.10500000000000005" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/Landing_Basesamarelo_3.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </collision>
+    </link>
+    <link name="Landing_Basesamarelo_4">
+        <inertial>
+            <origin xyz="0.008521329256636819 0.0 0.0024703631715978958" rpy="0.0 -0.0 0.0" />
+            <mass value="8.276565970628468" />
+            <inertia ixx="0.8069584700195094" iyy="0.8325778200800187" izz="1.6395018189472808" ixy="0.0" iyz="1.7763568394002505e-15" ixz="8.606897290519555e-05" />
+        </inertial>
+        <visual name="Landing_Basesamarelo_4_visual">
+            <origin xyz="-4.0 -4.5 -0.10400000000000006" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/Landing_Basesamarelo_4.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </visual>
+        <collision name="Landing_Basesamarelo_4_collision">
+            <origin xyz="-4.0 -4.5 -0.10400000000000006" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/Landing_Basesamarelo_4.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </collision>
+    </link>
+    <link name="Landing_Basesamarelo_5">
+        <inertial>
+            <origin xyz="0.008521329256631134 -2.842170943040401e-15 0.002470363171597807" rpy="0.0 -0.0 0.0" />
+            <mass value="8.276565970628445" />
+            <inertia ixx="0.8069584700196089" iyy="0.8325778200803029" izz="1.6395018189477355" ixy="-1.4210854715202004e-13" iyz="-2.6645352591003757e-15" ixz="8.606897289720195e-05" />
+        </inertial>
+        <visual name="Landing_Basesamarelo_5_visual">
+            <origin xyz="-7.0 -3.0 -0.10400000000000006" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/Landing_Basesamarelo_5.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </visual>
+        <collision name="Landing_Basesamarelo_5_collision">
+            <origin xyz="-7.0 -3.0 -0.10400000000000006" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/Landing_Basesamarelo_5.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </collision>
+    </link>
+    <link name="Landing_Basesamarelo_6">
+        <inertial>
+            <origin xyz="0.00852132925663625 4.263256414560601e-16 0.002470363171597967" rpy="0.0 -0.0 0.0" />
+            <mass value="8.276565970628454" />
+            <inertia ixx="0.8069584700195236" iyy="0.8325778200800187" izz="1.6395018189473092" ixy="7.105427357601002e-15" iyz="7.105427357601002e-15" ixz="8.606897290519555e-05" />
+        </inertial>
+        <visual name="Landing_Basesamarelo_6_visual">
+            <origin xyz="-5.0 -1.088 -1.605" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/Landing_Basesamarelo_6.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </visual>
+        <collision name="Landing_Basesamarelo_6_collision">
+            <origin xyz="-5.0 -1.088 -1.605" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/Landing_Basesamarelo_6.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </collision>
+    </link>
+    <link name="base_movelzinza1">
+        <inertial>
+            <origin xyz="4.263256414560601e-16 1.7053025658242404e-15 0.365" rpy="0.0 -0.0 0.0" />
+            <mass value="5730.499999999999" />
+            <inertia ixx="732.0236208333299" iyy="732.0236208333135" izz="955.0833333339688" ixy="-3.637978807091713e-12" iyz="-9.094947017729282e-13" ixz="0.0" />
+        </inertial>
+        <visual name="base_movelzinza1_visual">
+            <origin xyz="-0.9999999999999943 -2.9999999999999822 -0.1" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/base_movelzinza1.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </visual>
+        <collision name="base_movelzinza1_collision">
+            <origin xyz="-0.9999999999999943 -2.9999999999999822 -0.1" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/base_movelzinza1.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </collision>
+    </link>
+    <link name="base_movelzinza2">
+        <inertial>
+            <origin xyz="0.0 0.0 0.48999999999999994" rpy="0.0 -0.0 0.0" />
+            <mass value="7692.999999999999" />
+            <inertia ixx="1256.779766666703" iyy="1256.7797666666738" izz="1282.1666666668025" ixy="-2.9103830456733704e-11" iyz="-7.275957614183426e-12" ixz="3.637978807091713e-12" />
+        </inertial>
+        <visual name="base_movelzinza2_visual">
+            <origin xyz="-4.5 -6.5 -0.1" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/base_movelzinza2.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </visual>
+        <collision name="base_movelzinza2_collision">
+            <origin xyz="-4.5 -6.5 -0.1" rpy="0.0 -0.0 0.0" />
+            <geometry>
+                <mesh filename="meshes/base_movelzinza2.stl" scale="0.001 0.001 0.001" />
+            </geometry>
+        </collision>
+    </link>
+    <joint name="base_link_Rígido-31" type="fixed">
+        <origin xyz="-1.900211556812397 3.9582063296646015 0.05000000000000005" rpy="-0.0 -1.5707963267948966 0" />
+        <parent link="base_link" />
+        <child link="parede1" />
+    </joint>
+    <joint name="base_link_Rígido-32" type="fixed">
+        <origin xyz="2.149788443187603 8.0082063296646 0.05000000000000005" rpy="-1.5707963267948966 -0.0 0.0" />
+        <parent link="base_link" />
+        <child link="parede4" />
+    </joint>
+    <joint name="base_link_Rígido-33" type="fixed">
+        <origin xyz="6.199788443187604 3.9582063196646016 0.05000000000000005" rpy="-3.141592653589793 -1.5707963267948966 0" />
+        <parent link="base_link" />
+        <child link="parede3" />
+    </joint>
+    <joint name="base_link_Rígido-34" type="fixed">
+        <origin xyz="2.149788443187603 -0.09179367033539848 0.05000000000000005" rpy="1.5707963267948966 -0.0 0.0" />
+        <parent link="base_link" />
+        <child link="parede2" />
+    </joint>
+    <joint name="base_link_Rígido-35" type="fixed">
+        <origin xyz="-0.8502115568123969 0.7082063296646015 0.09900000000000006" rpy="0.0 -0.0 0.0" />
+        <parent link="base_link" />
+        <child link="Takeoff_Baseazul" />
+    </joint>
+    <joint name="base_link_Rígido-37" type="fixed">
+        <origin xyz="-0.3502115568123969 5.958206329664602 0.09900000000000006" rpy="0.0 -0.0 0.0" />
+        <parent link="base_link" />
+        <child link="Landing_Basesazul3" />
+    </joint>
+    <joint name="base_link_Rígido-38" type="fixed">
+        <origin xyz="2.149788443187603 4.458206329664602 0.09900000000000006" rpy="0.0 -0.0 0.0" />
+        <parent link="base_link" />
+        <child link="Landing_Basesazul4" />
+    </joint>
+    <joint name="base_link_Rígido-40" type="fixed">
+        <origin xyz="5.149788443187604 2.9582063296646015 0.09900000000000006" rpy="0.0 -0.0 0.0" />
+        <parent link="base_link" />
+        <child link="Landing_Basesazul5" />
+    </joint>
+    <joint name="base_link_Rígido-41" type="fixed">
+        <origin xyz="3.1377884731876033 0.9582017896646015 0.07300000000000006" rpy="0.0 -0.0 0.0" />
+        <parent link="base_link" />
+        <child link="casa_paredes" />
+    </joint>
+    <joint name="casa_paredes_Rígido-42" type="fixed">
+        <origin xyz="0.0 0.0 1.522" rpy="0.0 -0.0 0.0" />
+        <parent link="casa_paredes" />
+        <child link="casa_teto" />
+    </joint>
+    <joint name="casa_teto_Rígido-43" type="fixed">
+        <origin xyz="0.011999969999999962 0.08800454000000002 0.004000000000000057" rpy="0.0 -0.0 0.0" />
+        <parent link="casa_teto" />
+        <child link="Landing_Basesazul6" />
+    </joint>
+    <joint name="Takeoff_Baseazul_Rígido-44" type="fixed">
+        <origin xyz="0.0 0.0 0.49100000000000005" rpy="0.0 -0.0 0.0" />
+        <parent link="Takeoff_Baseazul" />
+        <child link="Takeoff_Baseamarelo" />
+    </joint>
+    <joint name="Landing_Basesazul3_Rígido-46" type="fixed">
+        <origin xyz="0.0 0.0 0.005999999999999997" rpy="0.0 -0.0 0.0" />
+        <parent link="Landing_Basesazul3" />
+        <child link="Landing_Basesamarelo_3" />
+    </joint>
+    <joint name="Landing_Basesazul4_Rígido-48" type="fixed">
+        <origin xyz="0.0 0.0 0.005" rpy="0.0 -0.0 0.0" />
+        <parent link="Landing_Basesazul4" />
+        <child link="Landing_Basesamarelo_4" />
+    </joint>
+    <joint name="Landing_Basesazul5_Rígido-49" type="fixed">
+        <origin xyz="0.0 0.0 0.005" rpy="0.0 -0.0 0.0" />
+        <parent link="Landing_Basesazul5" />
+        <child link="Landing_Basesamarelo_5" />
+    </joint>
+    <joint name="Landing_Basesazul6_Rígido-50" type="fixed">
+        <origin xyz="-5.684341886080802e-16 -1.4210854715202004e-16 0.005" rpy="0.0 -0.0 0.0" />
+        <parent link="Landing_Basesazul6" />
+        <child link="Landing_Basesamarelo_6" />
+    </joint>
+    <joint name="base_movelzinza1_Rígido-56" type="fixed">
+        <origin xyz="0.0 0.0 0.73" rpy="0.0 -0.0 0.0" />
+        <parent link="base_movelzinza1" />
+        <child link="Landing_Basesazul1" />
+    </joint>
+    <joint name="Landing_Basesazul1_Rígido-57" type="fixed">
+        <origin xyz="-1.4210854715202004e-16 0.0 0.010999999999999944" rpy="0.0 -0.0 0.0" />
+        <parent link="Landing_Basesazul1" />
+        <child link="Landing_Basesamarelo_1" />
+    </joint>
+    <joint name="base_link_Rígido-58" type="fixed">
+        <origin xyz="-0.8502115568123969 2.9582063296646015 0.09900000000000006" rpy="0.0 -0.0 0.0" />
+        <parent link="base_link" />
+        <child link="base_movelzinza1" />
+    </joint>
+    <joint name="base_link_Rígido-59" type="fixed">
+        <origin xyz="2.649788443187603 6.458206329664602 0.09900000000000006" rpy="0.0 -0.0 0.0" />
+        <parent link="base_link" />
+        <child link="base_movelzinza2" />
+    </joint>
+    <joint name="base_movelzinza2_Rígido-60" type="fixed">
+        <origin xyz="0.0 0.0 0.98" rpy="0.0 -0.0 0.0" />
+        <parent link="base_movelzinza2" />
+        <child link="Landing_Basesazul2" />
+    </joint>
+    <joint name="Landing_Basesazul2_Rígido-61" type="fixed">
+        <origin xyz="0.0 0.0 0.00999998000000005" rpy="0.0 -0.0 0.0" />
+        <parent link="Landing_Basesazul2" />
+        <child link="Landing_Basesamarelo_2" />
+    </joint>
+</robot>

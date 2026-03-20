@@ -1,0 +1,21 @@
+uav_mass: 2.0
+
+motor_params:
+  n_motors: 4
+  a: 0.209415
+  b: -0.023573
+
+mrs_uav_managers:
+
+  constraint_manager:
+
+    default_constraints:
+      gps_garmin: "medium"
+      gps_baro: "medium"
+      rtk: "medium"
+      aloam: "slow"
+      hector_garmin: "slow"
+      vio: "slow"
+      optflow: "slow"
+      other: "slow"
+      ground_truth: "medium"

@@ -1,0 +1,80 @@
+# do not modify these
+root: ./
+name: simulation
+socket_name: mrs
+attach: false
+tmux_options: -f /etc/ctu-mrs/tmux.conf
+# you can modify these
+pre_window:
+  - export UAV_NAME=uav1
+  - export RUN_TYPE=simulation
+  - export UAV_TYPE=f450
+  - export PLATFORM_CONFIG=/home/lmnr31/ros2_ws/src/mrs_uav_gazebo_simulator/config/mrs_uav_system/f450.yaml
+  - export RMW_IMPLEMENTATION=rmw_zenoh_cpp
+  - export USE_SIM_TIME="true"
+  - export GZ_SIM_MODEL_PATH=$GZ_SIM_MODEL_PATH:$HOME/drone_ws/src/arena_2025_desenho:/home/lmnr31/ros2_ws/src/mrs_uav_gazebo_simulator/models/mrs_robot_description/sdf/drones
+  - export GZ_SIM_RESOURCE_PATH=$GZ_SIM_RESOURCE_PATH:$HOME/drone_ws/src/arena_2025_desenho
+
+startup_window: status
+windows:
+  - zenoh_router:
+      layout: tiled
+      panes:
+        - ros2 run rmw_zenoh_cpp rmw_zenohd
+  - gazebo:
+      layout: tiled
+      panes:                                                        # world_file:=/home/lmnr31/ros2_ws/src/arena_2025_desenho/my_arena.world
+        - ros2 launch mrs_uav_gazebo_simulator simulation.launch.py   gz_headless:=false gz_verbose:=true
+        - |
+          waitForGazebo; sleep 5; ros2 service call /mrs_drone_spawner/spawn mrs_msgs/srv/String "{value: '1 --$UAV_TYPE --enable-rangefinder --enable-bluefox-camera-down --enable-realsense-front --pos -0.85 0.70 1 1.57'}"
+  - px4_api:
+      layout: tiled
+      panes:
+        - ros2 launch mrs_uav_px4_api api.launch.py
+  # - core:
+  #     layout: tiled
+  #     panes:
+  #       - ros2 launch mrs_uav_core core.launch.py
+  #         platform_config:=$PLATFORM_CONFIG
+  #         world_config:=./config/world_config.yaml
+  #         custom_config:=./config/custom_config.yaml
+  #         network_config:=./config/network_config.yaml
+  # - filtro:
+  #     layout: tiled
+  #     panes:
+  #       - waitForGazebo; sleep 8; source ~/ros2_ws/install/setup.bash; ros2 run drone_custom_control drone_command_filter
+  - activation:
+      layout: tiled
+      panes:
+        - waitForGazebo; sleep 10; source ~/ros2_ws/install/setup.bash && ros2 run drone_control drone_activator
+
+  - status:
+      layout: tiled
+      panes:
+        - ros2 run ... waitForPX4; sleep 3; ./custom_status/sim_status.py
+  # - autostart:
+  #     layout: tiled
+  #     panes:
+  #       - ros2 launch mrs_uav_autostart automatic_start.launch.py custom_config:=./config/automatic_start.yaml
+  # - takeoff:
+  #     layout: tiled
+  #     panes:
+  #       - waitForCore; sleep 10; ./takeoff.sh
+  - rviz:
+      layout: tiled
+      panes:
+        - waitForCore; ros2 run rviz2 rviz2 -d ./rviz.rviz --ros-args -p use_sim_time:=true
+  # - layout:
+  #     layout: tiled
+  #     panes:
+  #       - waitForCore; sleep 2; ~/.i3/layout_manager.sh ./layout.json
+
+  - vou:
+      layout: tiled
+      panes:
+        - |
+          waitForGazebo; sleep 5;
+          waitForPX4; 
+          ros2 run drone_control drone_go_forward
+  - terminal1:
+  - terminal2:

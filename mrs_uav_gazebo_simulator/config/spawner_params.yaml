@@ -1,0 +1,21 @@
+mrs_drone_spawner:
+  ros__parameters:
+    mavlink_config:
+      vehicle_base_port: 14000
+      stream_for_qgc: true
+
+    gazebo_models:
+      spacing: 5.0 # for randomized spawn poses
+      default_robot_name: 'uav'
+    
+    jinja_templates:
+      save_rendered_sdf: true
+      suffix: '.sdf.jinja'
+
+    firmware_launch_delay: 10.0 # [s] after spawn, wait before launching px4 firmware
+    
+    extra_resource_paths: []
+
+    tf_static_publisher:
+      base_frame: "fcu"
+      ignored_sensor_frames: ["air_pressure_sensor", "magnetometer_sensor", "navsat_sensor", "imu_sensor", "lidar"] #lidar is reserved for PX4 Garmin

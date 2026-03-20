@@ -1,0 +1,27 @@
+material Takeoff_Base_Texture
+{
+  technique
+  {
+    pass
+    {
+      texture_unit
+      {
+        texture Takeoff_Base1.png
+      }
+    }
+  }
+}
+
+material Landing_Base_Texture
+{
+  technique
+  {
+    pass
+    {
+      texture_unit
+      {
+        texture Landing_Bases.png
+      }
+    }
+  }
+}

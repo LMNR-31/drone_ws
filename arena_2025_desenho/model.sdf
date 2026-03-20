@@ -1,0 +1,688 @@
+<sdf version='1.11'>
+  <model name='arena_2025_desenho'>
+    <link name='base_link'>
+      <inertial>
+        <pose>1.9370243713970241 3.7801517597274779 1.663648573955818 0 0 0</pose>
+        <mass>209967.48191385559</mass>
+        <inertia>
+          <ixx>2460245.0337909479</ixx>
+          <ixy>-120542.69931232629</ixy>
+          <ixz>-60341.763518111897</ixz>
+          <iyy>2418795.4424423119</iyy>
+          <iyz>-44523.10562155582</iyz>
+          <izz>3767137.4771538312</izz>
+        </inertia>
+      </inertial>
+      <collision name='base_link_collision_collision'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/base_link.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__parede1_collision_collision_1'>
+        <pose>-1.8502115568123969 -0.041793670335398492 -1.387778780781446e-17 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/parede1.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__parede4_collision_collision_2'>
+        <pose>-1.8502115568123969 -0.041793670335399817 -2.4355517602714372e-15 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/parede4.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__parede3_collision_collision_3'>
+        <pose>-1.8502115568123969 -0.041793670335398943 1.117161918529064e-15 1.224646799147353e-16 -7.4987989133092894e-33 1.224646799147353e-16</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/parede3.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__parede2_collision_collision_4'>
+        <pose>-1.8502115568123969 -0.041793670335398478 -1.387778780781446e-17 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/parede2.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__Takeoff_Baseazul_collision_collision_5'>
+        <pose>-1.8502115568123969 -0.041793670335398492 2.9143354396410359e-16 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/Takeoff_Baseazul.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__Takeoff_Baseamarelo_collision_collision_6'>
+        <pose>-1.8502115568123969 -0.041793670335398492 3.6082248300317588e-16 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/Takeoff_Baseamarelo.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__Landing_Basesazul3_collision_collision_7'>
+        <pose>-1.8502115568123969 -0.041793670335398048 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/Landing_Basesazul3.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__Landing_Basesamarelo_3_collision_collision_8'>
+        <pose>-1.8502115568123969 -0.041793670335398048 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/Landing_Basesamarelo_3.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__Landing_Basesazul4_collision_collision_9'>
+        <pose>-1.8502115568123969 -0.041793670335398048 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/Landing_Basesazul4.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__Landing_Basesamarelo_4_collision_collision_10'>
+        <pose>-1.8502115568123969 -0.041793670335398048 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/Landing_Basesamarelo_4.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__Landing_Basesazul5_collision_collision_11'>
+        <pose>-1.850211556812378 -0.041793670335390498 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/Landing_Basesazul5.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__Landing_Basesamarelo_5_collision_collision_12'>
+        <pose>-1.850211556812396 -0.041793670335398492 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/Landing_Basesamarelo_5.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__casa_paredes_collision_collision_13'>
+        <pose>-1.850211556812398 -0.041793670335398492 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/casa_paredes.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__casa_teto_collision_collision_14'>
+        <pose>-1.8502115568123949 -0.041793670335397937 1.110223024625157e-16 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/casa_teto.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__Landing_Basesazul6_collision_collision_15'>
+        <pose>-1.850211556812398 -0.041793670335398603 -1.110223024625157e-16 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/Landing_Basesazul6.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__Landing_Basesamarelo_6_collision_collision_16'>
+        <pose>-1.850211556812398 -0.041793670335398818 -0.0010000000000000011 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/Landing_Basesamarelo_6.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__base_movelzinza1_collision_collision_17'>
+        <pose>-1.8502115568123909 -0.041793670335380728 -0.00099999999999994538 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/base_movelzinza1.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__Landing_Basesazul1_collision_collision_18'>
+        <pose>-1.8502115568123889 -0.041793670335374067 1.490116363633831e-11 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/Landing_Basesazul1.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__Landing_Basesamarelo_1_collision_collision_19'>
+        <pose>-1.8502115568123849 -0.041793670335362958 1.490116363633831e-11 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/Landing_Basesamarelo_1.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__base_movelzinza2_collision_collision_20'>
+        <pose>-1.8502115568123969 -0.041793670335398048 -0.00099999999999994538 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/base_movelzinza2.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__Landing_Basesazul2_collision_collision_21'>
+        <pose>-1.8502115568123909 -0.041793670335388278 -0.0010000160932540909 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/Landing_Basesazul2.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__Landing_Basesamarelo_2_collision_collision_22'>
+        <pose>-1.8502115568123869 -0.04179367033538206 -0.0010000160932540909 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/Landing_Basesamarelo_2.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+
+
+      #visuals cores
+
+
+      <visual name='base_link_visual_visual'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/base_link.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.4 0.4 0.4 1</ambient>
+          <diffuse>0.6 0.6 0.6 1</diffuse>
+          <specular>0.8 0.8 0.8 1</specular>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__parede1_visual_visual_1'>
+        <pose>-1.8502115568123969 -0.041793670335398492 -1.387778780781446e-17 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/parede1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.0 0.0 0.5 0.65</ambient>
+          <diffuse>0.0 0.0 0.8 0.65</diffuse>
+          <specular>0.3 0.3 0.8 0.65</specular>
+          <transparency>0.65</transparency>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__parede4_visual_visual_2'>
+        <pose>-1.8502115568123969 -0.041793670335399817 -2.4355517602714372e-15 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/parede4.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.0 0.0 0.5 0.65</ambient>
+          <diffuse>0.0 0.0 0.8 0.65</diffuse>
+          <specular>0.3 0.3 0.8 0.65</specular>
+          <transparency>0.65</transparency>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__parede3_visual_visual_3'>
+        <pose>-1.8502115568123969 -0.041793670335398943 1.117161918529064e-15 1.224646799147353e-16 -7.4987989133092894e-33 1.224646799147353e-16</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/parede3.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.0 0.0 0.5 0.65</ambient>
+          <diffuse>0.0 0.0 0.8 0.65</diffuse>
+          <specular>0.3 0.3 0.8 0.65</specular>
+          <transparency>0.65</transparency>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__parede2_visual_visual_4'>
+        <pose>-1.8502115568123969 -0.041793670335398478 -1.387778780781446e-17 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/parede2.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.0 0.0 0.5 0.65</ambient>
+          <diffuse>0.0 0.0 0.8 0.65</diffuse>
+          <specular>0.3 0.3 0.8 0.65</specular>
+          <transparency>0.65</transparency>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__Takeoff_Baseazul_visual_visual_5'>
+        <pose>-1.8502115568123969 -0.041793670335398492 2.9143354396410359e-16 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/Takeoff_Baseazul.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.0 0.0 0.5 1</ambient>
+          <diffuse>0.0 0.0 0.8 1</diffuse>
+          <specular>0.3 0.3 0.8 1</specular>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__Takeoff_Baseamarelo_visual_visual_6'>
+        <pose>-1.8502115568123969 -0.041793670335398492 3.6082248300317588e-16 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/Takeoff_Baseamarelo.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.8 0.8 0.0 1</ambient>
+          <diffuse>1.0 1.0 0.0 1</diffuse>
+           <specular>0.8 0.8 0.3 1</specular>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__Landing_Basesazul3_visual_visual_7'>
+        <pose>-1.8502115568123969 -0.041793670335398048 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/Landing_Basesazul3.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.0 0.0 0.5 1</ambient>
+          <diffuse>0.0 0.0 0.8 1</diffuse>
+          <specular>0.3 0.3 0.8 1</specular>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__Landing_Basesamarelo_3_visual_visual_8'>
+        <pose>-1.8502115568123969 -0.041793670335398048 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/Landing_Basesamarelo_3.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.8 0.8 0.0 1</ambient>
+          <diffuse>1.0 1.0 0.0 1</diffuse>
+           <specular>0.8 0.8 0.3 1</specular>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__Landing_Basesazul4_visual_visual_9'>
+        <pose>-1.8502115568123969 -0.041793670335398048 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/Landing_Basesazul4.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.0 0.0 0.5 1</ambient>
+          <diffuse>0.0 0.0 0.8 1</diffuse>
+          <specular>0.3 0.3 0.8 1</specular>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__Landing_Basesamarelo_4_visual_visual_10'>
+        <pose>-1.8502115568123969 -0.041793670335398048 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/Landing_Basesamarelo_4.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.8 0.8 0.0 1</ambient>
+          <diffuse>1.0 1.0 0.0 1</diffuse>
+           <specular>0.8 0.8 0.3 1</specular>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__Landing_Basesazul5_visual_visual_11'>
+        <pose>-1.850211556812378 -0.041793670335390498 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/Landing_Basesazul5.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.0 0.0 0.5 1</ambient>
+          <diffuse>0.0 0.0 0.8 1</diffuse>
+          <specular>0.3 0.3 0.8 1</specular>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__Landing_Basesamarelo_5_visual_visual_12'>
+        <pose>-1.850211556812396 -0.041793670335398492 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/Landing_Basesamarelo_5.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.8 0.8 0.0 1</ambient>
+          <diffuse>1.0 1.0 0.0 1</diffuse>
+           <specular>0.8 0.8 0.3 1</specular>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__casa_paredes_visual_visual_13'>
+        <pose>-1.850211556812398 -0.041793670335398492 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/casa_paredes.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.92 0.90 0.85 1</ambient>
+          <diffuse>0.94 0.92 0.87 1</diffuse>
+          <specular>0.14 0.14 0.13 1</specular> 
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__casa_teto_visual_visual_14'>
+        <pose>-1.8502115568123949 -0.041793670335397937 1.110223024625157e-16 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/casa_teto.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.92 0.90 0.85 1</ambient>
+          <diffuse>0.94 0.92 0.87 1</diffuse>
+          <specular>0.14 0.14 0.13 1</specular> 
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__Landing_Basesazul6_visual_visual_15'>
+        <pose>-1.850211556812398 -0.041793670335398603 -1.110223024625157e-16 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/Landing_Basesazul6.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.0 0.0 0.5 1</ambient>
+          <diffuse>0.0 0.0 0.8 1</diffuse>
+          <specular>0.3 0.3 0.8 1</specular>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__Landing_Basesamarelo_6_visual_visual_16'>
+        <pose>-1.850211556812398 -0.041793670335398818 -0.0010000000000000011 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/Landing_Basesamarelo_6.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.8 0.8 0.0 1</ambient>
+          <diffuse>1.0 1.0 0.0 1</diffuse>
+           <specular>0.8 0.8 0.3 1</specular>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__base_movelzinza1_visual_visual_17'>
+        <pose>-1.8502115568123909 -0.041793670335380728 -0.00099999999999994538 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/base_movelzinza1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.92 0.90 0.85 1</ambient>
+          <diffuse>0.94 0.92 0.87 1</diffuse>
+          <specular>0.14 0.14 0.13 1</specular> 
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__Landing_Basesazul1_visual_visual_18'>
+        <pose>-1.8502115568123889 -0.041793670335374067 1.490116363633831e-11 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/Landing_Basesazul1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.0 0.0 0.5 1</ambient>
+          <diffuse>0.0 0.0 0.8 1</diffuse>
+          <specular>0.3 0.3 0.8 1</specular>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__Landing_Basesamarelo_1_visual_visual_19'>
+        <pose>-1.8502115568123849 -0.041793670335362958 1.490116363633831e-11 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/Landing_Basesamarelo_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.8 0.8 0.0 1</ambient>
+          <diffuse>1.0 1.0 0.0 1</diffuse>
+           <specular>0.8 0.8 0.3 1</specular>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__base_movelzinza2_visual_visual_20'>
+        <pose>-1.8502115568123969 -0.041793670335398048 -0.00099999999999994538 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/base_movelzinza2.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.92 0.90 0.85 1</ambient>
+          <diffuse>0.94 0.92 0.87 1</diffuse>
+          <specular>0.14 0.14 0.13 1</specular> 
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__Landing_Basesazul2_visual_visual_21'>
+        <pose>-1.8502115568123909 -0.041793670335388278 -0.0010000160932540909 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/Landing_Basesazul2.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.0 0.0 0.5 1</ambient>
+          <diffuse>0.0 0.0 0.8 1</diffuse>
+          <specular>0.3 0.3 0.8 1</specular>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__Landing_Basesamarelo_2_visual_visual_22'>
+        <pose>-1.8502115568123869 -0.04179367033538206 -0.0010000160932540909 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>meshes/Landing_Basesamarelo_2.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.8 0.8 0.0 1</ambient>
+          <diffuse>1.0 1.0 0.0 1</diffuse>
+           <specular>0.8 0.8 0.3 1</specular>
+        </material>
+      </visual>
+    </link>
+    <frame name='base_link_Rígido-31' attached_to='base_link'>
+      <pose>-1.900211556812397 3.958206329664602 0.050000000000000051 0 -1.5707963267948966 0</pose>
+    </frame>
+    <frame name='parede1' attached_to='base_link_Rígido-31'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='base_link_Rígido-32' attached_to='base_link'>
+      <pose>2.1497884431876031 8.0082063296646009 0.050000000000000051 -1.5707963267948959 0 0</pose>
+    </frame>
+    <frame name='parede4' attached_to='base_link_Rígido-32'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='base_link_Rígido-33' attached_to='base_link'>
+      <pose>6.1997884431876038 3.958206319664602 0.050000000000000051 -3.1415926535897931 -1.5707963267948966 0</pose>
+    </frame>
+    <frame name='parede3' attached_to='base_link_Rígido-33'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='base_link_Rígido-34' attached_to='base_link'>
+      <pose>2.1497884431876031 -0.091793670335398481 0.050000000000000051 1.5707963267948959 0 0</pose>
+    </frame>
+    <frame name='parede2' attached_to='base_link_Rígido-34'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='Takeoff_Baseazul_Rígido-44' attached_to='Takeoff_Baseazul'>
+      <pose>0 0 0.49099999999999999 0 0 0</pose>
+    </frame>
+    <frame name='Takeoff_Baseamarelo' attached_to='Takeoff_Baseazul_Rígido-44'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='base_link_Rígido-35' attached_to='base_link'>
+      <pose>-0.85021155681239691 0.70820632966460151 0.09900000000000006 0 0 0</pose>
+    </frame>
+    <frame name='Takeoff_Baseazul' attached_to='base_link_Rígido-35'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='Landing_Basesazul3_Rígido-46' attached_to='Landing_Basesazul3'>
+      <pose>0 0 0.0059999999999999967 0 0 0</pose>
+    </frame>
+    <frame name='Landing_Basesamarelo_3' attached_to='Landing_Basesazul3_Rígido-46'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='base_link_Rígido-37' attached_to='base_link'>
+      <pose>-0.35021155681239691 5.958206329664602 0.09900000000000006 0 0 0</pose>
+    </frame>
+    <frame name='Landing_Basesazul3' attached_to='base_link_Rígido-37'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='Landing_Basesazul4_Rígido-48' attached_to='Landing_Basesazul4'>
+      <pose>0 0 0.0050000000000000001 0 0 0</pose>
+    </frame>
+    <frame name='Landing_Basesamarelo_4' attached_to='Landing_Basesazul4_Rígido-48'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='base_link_Rígido-38' attached_to='base_link'>
+      <pose>2.1497884431876031 4.458206329664602 0.09900000000000006 0 0 0</pose>
+    </frame>
+    <frame name='Landing_Basesazul4' attached_to='base_link_Rígido-38'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='Landing_Basesazul5_Rígido-49' attached_to='Landing_Basesazul5'>
+      <pose>0 0 0.0050000000000000001 0 0 0</pose>
+    </frame>
+    <frame name='Landing_Basesamarelo_5' attached_to='Landing_Basesazul5_Rígido-49'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='base_link_Rígido-40' attached_to='base_link'>
+      <pose>5.149788443187604 2.958206329664602 0.09900000000000006 0 0 0</pose>
+    </frame>
+    <frame name='Landing_Basesazul5' attached_to='base_link_Rígido-40'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='Landing_Basesazul6_Rígido-50' attached_to='Landing_Basesazul6'>
+      <pose>-5.6843418860808016e-16 -1.4210854715201999e-16 0.0050000000000000001 0 0 0</pose>
+    </frame>
+    <frame name='Landing_Basesamarelo_6' attached_to='Landing_Basesazul6_Rígido-50'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='casa_teto_Rígido-43' attached_to='casa_teto'>
+      <pose>0.011999969999999961 0.08800454000000002 0.0040000000000000573 0 0 0</pose>
+    </frame>
+    <frame name='Landing_Basesazul6' attached_to='casa_teto_Rígido-43'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='casa_paredes_Rígido-42' attached_to='casa_paredes'>
+      <pose>0 0 1.522 0 0 0</pose>
+    </frame>
+    <frame name='casa_teto' attached_to='casa_paredes_Rígido-42'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='base_link_Rígido-41' attached_to='base_link'>
+      <pose>3.1377884731876029 0.95820178966460146 0.073000000000000065 0 0 0</pose>
+    </frame>
+    <frame name='casa_paredes' attached_to='base_link_Rígido-41'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='Landing_Basesazul1_Rígido-57' attached_to='Landing_Basesazul1'>
+      <pose>-1.4210854715201999e-16 0 0.01099999999999994 0 0 0</pose>
+    </frame>
+    <frame name='Landing_Basesamarelo_1' attached_to='Landing_Basesazul1_Rígido-57'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='base_movelzinza1_Rígido-56' attached_to='base_movelzinza1'>
+      <pose>0 0 0.72999999999999998 0 0 0</pose>
+    </frame>
+    <frame name='Landing_Basesazul1' attached_to='base_movelzinza1_Rígido-56'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='base_link_Rígido-58' attached_to='base_link'>
+      <pose>-0.85021155681239691 2.958206329664602 0.09900000000000006 0 0 0</pose>
+    </frame>
+    <frame name='base_movelzinza1' attached_to='base_link_Rígido-58'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='Landing_Basesazul2_Rígido-61' attached_to='Landing_Basesazul2'>
+      <pose>0 0 0.0099999800000000506 0 0 0</pose>
+    </frame>
+    <frame name='Landing_Basesamarelo_2' attached_to='Landing_Basesazul2_Rígido-61'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='base_movelzinza2_Rígido-60' attached_to='base_movelzinza2'>
+      <pose>0 0 0.97999999999999998 0 0 0</pose>
+    </frame>
+    <frame name='Landing_Basesazul2' attached_to='base_movelzinza2_Rígido-60'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='base_link_Rígido-59' attached_to='base_link'>
+      <pose>2.6497884431876031 6.458206329664602 0.09900000000000006 0 0 0</pose>
+    </frame>
+    <frame name='base_movelzinza2' attached_to='base_link_Rígido-59'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+  </model>
+</sdf>
