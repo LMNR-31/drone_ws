@@ -144,13 +144,17 @@ private:
   void waypoints_callback(const geometry_msgs::msg::PoseArray::SharedPtr msg) {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    if (msg->poses.size() < 2) {
+    // ✅ VALIDAÇÃO: Mínimo 1 waypoint
+    if (msg->poses.size() < 1) {
       RCLCPP_WARN(this->get_logger(), "❌ Waypoints insuficientes: %zu", msg->poses.size());
       return;
     }
 
-    // ✅ DETECTA POUSO
     double last_z = msg->poses.back().position.z;
+
+    // ==========================================
+    // DETECTA POUSO (Z < 0.5)
+    // ==========================================
     if (last_z < 0.5) {
       RCLCPP_WARN(this->get_logger(), "\n🛬🛬🛬 POUSO DETECTADO! Z_final = %.2f m", last_z);
       pouso_em_andamento_ = true;
@@ -160,30 +164,57 @@ private:
       return;
     }
 
-    // ✅ WAYPOINTS DE LEVANTAMENTO (Z > 0.5)
-    RCLCPP_INFO(this->get_logger(), "\n📍 WAYPOINTS RECEBIDOS: %zu pontos", msg->poses.size());
-    for (size_t i = 0; i < msg->poses.size(); i++) {
-      RCLCPP_INFO(this->get_logger(), 
-        "   WP[%zu]: X=%.2f, Y=%.2f, Z=%.2f", 
-        i, 
-        msg->poses[i].position.x,
-        msg->poses[i].position.y,
-        msg->poses[i].position.z);
-    }
-    RCLCPP_INFO(this->get_logger(), " ");
+    // ==========================================
+    // ESTRATÉGIA 1: 1 WAYPOINT = LEVANTAMENTO
+    // ==========================================
+    if (msg->poses.size() == 1 && last_z >= 0.5) {
+      RCLCPP_INFO(this->get_logger(), "\n⬆️ WAYPOINT DE LEVANTAMENTO recebido:");
+      RCLCPP_INFO(this->get_logger(), "   Posição: X=%.2f, Y=%.2f, Z=%.2f",
+        msg->poses[0].position.x,
+        msg->poses[0].position.y,
+        msg->poses[0].position.z);
 
-    // ✅ ATIVA OFFBOARD+ARM (uma única vez ao receber waypoints de levantamento)
-    // Nota: chegamos aqui somente se last_z >= 0.5 (o bloco de pouso já fez return acima)
-    if (!offboard_activated_) {
-      RCLCPP_INFO(this->get_logger(), "🔋 Ativando OFFBOARD+ARM para levantamento...\n");
-      request_offboard();
-      request_arm();
-      offboard_activated_ = true;
-      activation_time_ = this->now();
+      last_waypoint_goal_.pose = msg->poses[0];
+      pouso_em_andamento_ = false;
+
+      // ✅ Ativa OFFBOARD+ARM (uma única vez ao receber waypoint de levantamento)
+      if (!offboard_activated_) {
+        RCLCPP_INFO(this->get_logger(), "🔋 Ativando OFFBOARD+ARM para levantamento...\n");
+        request_offboard();
+        request_arm();
+        offboard_activated_ = true;
+        activation_time_ = this->now();
+      }
+
+      return; // ✅ SAIR: Não vai para trajetória
     }
 
-    controlador_ativo_ = true;
-    pouso_em_andamento_ = false;
+    // ==========================================
+    // ESTRATÉGIA 2: 2+ WAYPOINTS = TRAJETÓRIA
+    // ==========================================
+    if (msg->poses.size() >= 2 && last_z >= 0.5) {
+      RCLCPP_INFO(this->get_logger(), "\n✈️ WAYPOINTS DE TRAJETÓRIA recebidos: %zu pontos", msg->poses.size());
+      for (size_t i = 0; i < msg->poses.size(); i++) {
+        RCLCPP_INFO(this->get_logger(),
+          "   WP[%zu]: X=%.2f, Y=%.2f, Z=%.2f",
+          i,
+          msg->poses[i].position.x,
+          msg->poses[i].position.y,
+          msg->poses[i].position.z);
+      }
+      RCLCPP_INFO(this->get_logger(), " ");
+
+      // ✅ Primeira posição = posição de levantamento (para OFFSET)
+      last_waypoint_goal_.pose = msg->poses[0];
+
+      // ✅ Processa trajetória e ativa controlador
+      controlador_ativo_ = true;
+      pouso_em_andamento_ = false;
+      state_voo_ = 3; // ✅ ESTADO 3: TRAJETÓRIA
+
+      RCLCPP_INFO(this->get_logger(), "✅ Trajetória ativada - Entrando em ESTADO 3\n");
+      return;
+    }
   }
 
   // ==========================================
