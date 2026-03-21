@@ -82,14 +82,14 @@ private:
     RCLCPP_INFO(this->get_logger(), "╚════════════════════════════════════════════════════╝");
     RCLCPP_INFO(this->get_logger(), "🔋⬆️ Executando: drone_activate_and_go_forward\n");
 
-    // ✅ NOVO: Nó unificado que faz TUDO (ativar + levantar)
-    int result2 = std::system("ros2 run drone_control drone_activate_and_go_forward");
-    
-    if (result2 == 0) {
-      RCLCPP_INFO(this->get_logger(), "✅ Drone Ativado + Levantado para 2 metros!\n");
-    }
+    // ✅ Executar em BACKGROUND para não bloquear
+    std::system("ros2 run drone_control drone_activate_and_go_forward &");
 
-    std::this_thread::sleep_for(5s);
+    RCLCPP_INFO(this->get_logger(), "✅ drone_activate_and_go_forward iniciado em BACKGROUND!\n");
+    RCLCPP_INFO(this->get_logger(), "✅ Mission Manager finalizando - Drone continua ativo!\n");
+
+    // ✅ Aguardar brevemente apenas para garantir que o nó iniciou
+    std::this_thread::sleep_for(2s);
 
     // ==========================================
     // SEQUÊNCIA CONCLUÍDA
