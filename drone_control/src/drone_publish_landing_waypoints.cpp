@@ -34,12 +34,21 @@ public:
     }
 
     if (!pose_received_) {
-      RCLCPP_WARN(this->get_logger(), "⚠️ Timeout aguardando pose. Usando fallback (0,0,2)");
-      current_pose_.pose.position.x = 0.0;
-      current_pose_.pose.position.y = 0.0;
-      current_pose_.pose.position.z = 2.0;
+      RCLCPP_WARN(this->get_logger(), "⚠️ Timeout aguardando pose. Mantendo última posição conhecida...");
+      // NÃO reseta X e Y - mantém o que foi recebido (ou 0,0 se nada foi recebido)
+      // Apenas ajusta Z se estiver abaixo de um valor seguro
+      if (current_pose_.pose.position.z < 0.5) {
+        current_pose_.pose.position.z = 2.0;  // Altura segura
+      }
+      RCLCPP_INFO(this->get_logger(), "✅ Usando última pose: X=%.2f, Y=%.2f, Z=%.2f",
+        current_pose_.pose.position.x,
+        current_pose_.pose.position.y,
+        current_pose_.pose.position.z);
     } else {
-      RCLCPP_INFO(this->get_logger(), "✅ Pose recebida!");
+      RCLCPP_INFO(this->get_logger(), "✅ Pose recebida! X=%.2f, Y=%.2f, Z=%.2f",
+        current_pose_.pose.position.x,
+        current_pose_.pose.position.y,
+        current_pose_.pose.position.z);
     }
 
     publishLandingWaypoints();
@@ -91,7 +100,14 @@ private:
 
   rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr waypoints_pub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_sub_;
-  geometry_msgs::msg::PoseStamped current_pose_;
+  geometry_msgs::msg::PoseStamped current_pose_ = []() {
+    geometry_msgs::msg::PoseStamped p;
+    p.pose.position.x = 0.0;
+    p.pose.position.y = 0.0;
+    p.pose.position.z = 2.0;  // Altura segura como fallback inicial
+    p.pose.orientation.w = 1.0;
+    return p;
+  }();
   bool pose_received_ = false;
 };
 
