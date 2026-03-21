@@ -216,6 +216,11 @@ private:
       pouso_em_andamento_ = false;  // ✅ Drone NÃO está mais pousando
       controlador_ativo_ = false;   // ✅ Reseta controlador para novo ciclo
 
+      // ✅ NOVO! Reset adicional de trajetória
+      trajectory_started_ = false;
+      trajectory_waypoints_.clear();
+      current_waypoint_idx_ = 0;
+
       // ✅ Log de debug ANTES da verificação
       RCLCPP_INFO(this->get_logger(), "🔍 DEBUG FLAGS ANTES:");
       RCLCPP_INFO(this->get_logger(), "   offboard_activated_=%d", offboard_activated_);
@@ -255,6 +260,42 @@ private:
     // (COM ou SEM descida de pouso)
     // ==========================================
     if (msg->poses.size() >= 2) {
+
+      // ✅ NOVO! Validação de segurança - Deve estar em HOVER (ESTADO 2)
+      RCLCPP_INFO(this->get_logger(), "🔍 VALIDAÇÃO ESTRATÉGIA 2:");
+      RCLCPP_INFO(this->get_logger(), "   state_voo_=%d (esperado 2=HOVER)", state_voo_);
+      RCLCPP_INFO(this->get_logger(), "   controlador_ativo_=%d", controlador_ativo_);
+
+      if (state_voo_ == 0) {
+        RCLCPP_WARN(this->get_logger(),
+          "\n❌ TRAJETÓRIA REJEITADA!");
+        RCLCPP_WARN(this->get_logger(),
+          "   Drone em ESTADO 0 (aguardando decolagem)");
+        RCLCPP_WARN(this->get_logger(),
+          "   ENVIE PRIMEIRO: 1 waypoint de levantamento (Z >= 0.5)");
+        RCLCPP_WARN(this->get_logger(),
+          "   DEPOIS: waypoints de trajetória (2+ waypoints)\n");
+        return;
+      }
+
+      if (state_voo_ != 2) {
+        RCLCPP_WARN(this->get_logger(),
+          "\n❌ TRAJETÓRIA REJEITADA!");
+        RCLCPP_WARN(this->get_logger(),
+          "   State_voo_=%d (esperado 2=HOVER)", state_voo_);
+        RCLCPP_WARN(this->get_logger(),
+          "   Estado atual: %s",
+          state_voo_ == 1 ? "Em decolagem" :
+          state_voo_ == 3 ? "Em trajetória" :
+          state_voo_ == 4 ? "Em pouso" : "Desconhecido");
+        RCLCPP_WARN(this->get_logger(),
+          "   Aguarde drone chegar em HOVER antes de enviar trajetória\n");
+        return;
+      }
+
+      // ✅ Aqui temos certeza que state_voo_ == 2 (HOVER)
+      RCLCPP_INFO(this->get_logger(), "\n✅ TRAJETÓRIA ACEITA! Drone em HOVER pronto para trajetória\n");
+
       RCLCPP_INFO(this->get_logger(), "\n✈️ WAYPOINTS DE TRAJETÓRIA recebidos: %zu pontos", msg->poses.size());
       for (size_t i = 0; i < msg->poses.size(); i++) {
         RCLCPP_INFO(this->get_logger(),
