@@ -1,6 +1,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/pose_array.hpp"
+#include "nav_msgs/msg/odometry.hpp"
 #include "mavros_msgs/srv/set_mode.hpp"
 #include "mavros_msgs/srv/command_bool.hpp"
 #include "mavros_msgs/msg/state.hpp" 
@@ -48,7 +49,11 @@ public:
       std::bind(&DroneControllerCompleto::waypoint_goal_callback, this, std::placeholders::_1)
     );
 
-    RCLCPP_INFO(this->get_logger(), "✓ Subscribers criados: /uav1/mavros/state, /waypoints e /waypoint_goal");
+    odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
+      "/uav1/mavros/local_position/odom", 10,
+      std::bind(&DroneControllerCompleto::odometry_callback, this, std::placeholders::_1));
+
+    RCLCPP_INFO(this->get_logger(), "✓ Subscribers criados: /uav1/mavros/state, /waypoints, /waypoint_goal e odometria");
 
     // ==========================================
     // SERVICE CLIENTS - ATIVAÇÃO
@@ -106,6 +111,7 @@ public:
     trajectory_started_ = false;
     current_waypoint_idx_ = 0;
     waypoint_duration_ = 4.0;
+    current_z_real_ = 0.0;
 
     RCLCPP_INFO(this->get_logger(), "\n📊 STATUS INICIAL:");
     RCLCPP_INFO(this->get_logger(), "   Estado: %d (ativação)", state_voo_);
@@ -158,6 +164,14 @@ private:
 
     arm_client_->async_send_request(request);
     RCLCPP_INFO(this->get_logger(), "🔴 Solicitando DISARM...");
+  }
+
+  // ==========================================
+  // CALLBACK: ODOMETRIA (Z REAL DO DRONE)
+  // ==========================================
+  void odometry_callback(const nav_msgs::msg::Odometry::SharedPtr msg) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    current_z_real_ = msg->pose.pose.position.z;
   }
 
   // ==========================================
@@ -434,6 +448,15 @@ private:
     // ==========================================
     else if (state_voo_ == 3) {
 
+      // ✅ NOVO! Detectar pouso durante trajetória (Z real < 0.5)
+      if (current_z_real_ < 0.5) {
+        RCLCPP_WARN(this->get_logger(), "\n🛬🛬🛬 POUSO DETECTADO DURANTE TRAJETÓRIA! Z = %.2f m", current_z_real_);
+        pouso_em_andamento_ = true;
+        controlador_ativo_ = false;
+        state_voo_ = 4;
+        return;
+      }
+
       // ✅ Detectar pouso automaticamente
       if (pouso_em_andamento_ && !controlador_ativo_) {
         RCLCPP_WARN(this->get_logger(), "🛬 POUSO DETECTADO EM TRAJETÓRIA - PARANDO IMEDIATAMENTE!");
@@ -479,12 +502,13 @@ private:
         double progress_pct = (elapsed_time / total_time) * 100.0;
 
         RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 10000,
-          "📡 Trajetória em execução | WP[%d/%zu]: X=%.2fm, Y=%.2fm, Z=%.2fm | %.1f%% concluído",
+          "📡 Trajetória em execução | WP[%d/%zu]: X=%.2fm, Y=%.2fm, Z=%.2fm (Z_real=%.2f) | %.1f%% concluído",
           current_waypoint_idx_,
           trajectory_waypoints_.size() - 1,
           pose_msg.pose.position.x,
           pose_msg.pose.position.y,
           pose_msg.pose.position.z,
+          current_z_real_,
           progress_pct);
       }
     }
@@ -540,6 +564,7 @@ private:
   rclcpp::Subscription<mavros_msgs::msg::State>::SharedPtr state_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr waypoints_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr waypoint_goal_sub_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
 
   // Service Clients - ATIVAÇÃO OFFBOARD + ARM
   rclcpp::Client<mavros_msgs::srv::SetMode>::SharedPtr mode_client_;
@@ -579,6 +604,9 @@ private:
   bool trajectory_started_;              // Trajetória já iniciou?
   int current_waypoint_idx_;             // Qual waypoint estamos (0-4)
   double waypoint_duration_;             // Tempo em cada waypoint (segundos)
+
+  // Posição Z real do drone (atualizada por odometria)
+  double current_z_real_;
 
   // Sincronização thread-safe
   std::mutex mutex_;
