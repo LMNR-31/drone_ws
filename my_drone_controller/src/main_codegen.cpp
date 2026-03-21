@@ -173,7 +173,7 @@ private:
     // ==========================================
     // DETECTA POUSO (Z < 0.5)
     // ==========================================
-    if (last_z < 0.5) {
+    if (msg->poses.size() == 1 && last_z < 0.5) {
       RCLCPP_WARN(this->get_logger(), "\n🛬🛬🛬 POUSO DETECTADO! Z_final = %.2f m", last_z);
       pouso_em_andamento_ = true;
       controlador_ativo_ = false;
@@ -215,8 +215,9 @@ private:
 
     // ==========================================
     // ESTRATÉGIA 2: 2+ WAYPOINTS = TRAJETÓRIA
+    // (COM ou SEM descida de pouso)
     // ==========================================
-    if (msg->poses.size() >= 2 && last_z >= 0.5) {
+    if (msg->poses.size() >= 2) {
       RCLCPP_INFO(this->get_logger(), "\n✈️ WAYPOINTS DE TRAJETÓRIA recebidos: %zu pontos", msg->poses.size());
       for (size_t i = 0; i < msg->poses.size(); i++) {
         RCLCPP_INFO(this->get_logger(),
