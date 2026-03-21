@@ -42,7 +42,12 @@ public:
       std::bind(&DroneControllerCompleto::waypoints_callback, this, std::placeholders::_1)
     );
 
-    RCLCPP_INFO(this->get_logger(), "✓ Subscribers criados: /uav1/mavros/state e /waypoints");
+    waypoint_goal_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
+      "/waypoint_goal", 1,
+      std::bind(&DroneControllerCompleto::waypoint_goal_callback, this, std::placeholders::_1)
+    );
+
+    RCLCPP_INFO(this->get_logger(), "✓ Subscribers criados: /uav1/mavros/state, /waypoints e /waypoint_goal");
 
     // ==========================================
     // SERVICE CLIENTS - ATIVAÇÃO
@@ -158,6 +163,34 @@ private:
         msg->poses[i].position.z);
     }
     RCLCPP_INFO(this->get_logger(), " ");
+
+    controlador_ativo_ = true;
+    pouso_em_andamento_ = false;
+  }
+
+  // ==========================================
+  // CALLBACK: RECEBE WAYPOINT ÚNICO (PoseStamped)
+  // ==========================================
+  void waypoint_goal_callback(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    double z = msg->pose.position.z;
+
+    // ✅ DETECTA POUSO
+    if (z < 0.5) {
+      RCLCPP_WARN(this->get_logger(), "\n🛬🛬🛬 POUSO DETECTADO! Z = %.2f m", z);
+      pouso_em_andamento_ = true;
+      controlador_ativo_ = false;
+      state_voo_ = 4;
+      RCLCPP_WARN(this->get_logger(), "🛬 CONTROLADOR DESLIGADO - DEIXANDO drone_soft_land POUSAR\n");
+      return;
+    }
+
+    // ✅ PONTO ÚNICO RECEBIDO
+    RCLCPP_INFO(this->get_logger(), "\n📍 WAYPOINT ÚNICO RECEBIDO: X=%.2f, Y=%.2f, Z=%.2f",
+      msg->pose.position.x,
+      msg->pose.position.y,
+      z);
 
     controlador_ativo_ = true;
     pouso_em_andamento_ = false;
@@ -336,6 +369,7 @@ private:
   // Subscribers
   rclcpp::Subscription<mavros_msgs::msg::State>::SharedPtr state_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr waypoints_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr waypoint_goal_sub_;
 
   // Service Clients - ATIVAÇÃO OFFBOARD + ARM
   rclcpp::Client<mavros_msgs::srv::SetMode>::SharedPtr mode_client_;
