@@ -93,6 +93,9 @@ public:
     arm_requested_ = false;
     takeoff_counter_ = 0;
     waypoint_goal_received_ = false;
+    last_waypoint_goal_.pose.position.x = 0.0;
+    last_waypoint_goal_.pose.position.y = 0.0;
+    last_waypoint_goal_.pose.position.z = 2.0; // Hover de segurança
 
     RCLCPP_INFO(this->get_logger(), "\n📊 STATUS INICIAL:");
     RCLCPP_INFO(this->get_logger(), "   Estado: %d (ativação)", state_voo_);
@@ -338,15 +341,18 @@ private:
         return; // ✅ CRUCIAL: NÃO publica mais!
       }
 
-      // Mantém drone em posição fixa (aguardando waypoints)
-      pose_msg.pose.position.x = 0.0;
-      pose_msg.pose.position.y = 0.0;
-      pose_msg.pose.position.z = 2.0;
+      // ✅ Publica o waypoint recebido
+      pose_msg.pose.position.x = last_waypoint_goal_.pose.position.x;
+      pose_msg.pose.position.y = last_waypoint_goal_.pose.position.y;
+      pose_msg.pose.position.z = last_waypoint_goal_.pose.position.z;
       pose_pub_->publish(pose_msg);
 
       if (cycle_count_ % 500 == 0) {
         RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 10000,
-          "📡 Trajetória em execução | Z: 2.0m (aguardando comando)");
+          "📡 Trajetória em execução | X: %.2fm, Y: %.2fm, Z: %.2fm",
+          last_waypoint_goal_.pose.position.x,
+          last_waypoint_goal_.pose.position.y,
+          last_waypoint_goal_.pose.position.z);
       }
     }
 
