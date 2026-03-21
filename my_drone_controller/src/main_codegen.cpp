@@ -114,7 +114,7 @@ public:
     current_z_real_ = 0.0;
 
     RCLCPP_INFO(this->get_logger(), "\n📊 STATUS INICIAL:");
-    RCLCPP_INFO(this->get_logger(), "   Estado: %d (ativação)", state_voo_);
+    RCLCPP_INFO(this->get_logger(), "   Estado: %d (aguardando waypoint)", state_voo_);
     RCLCPP_INFO(this->get_logger(), "   Controlador: %s", controlador_ativo_ ? "ATIVO" : "INATIVO");
     RCLCPP_INFO(this->get_logger(), "   Pouso: %s\n", pouso_em_andamento_ ? "SIM" : "NÃO");
   }
@@ -215,7 +215,6 @@ private:
       // ✅ RESET: Limpa flags do ciclo anterior (CRUCIAL!)
       pouso_em_andamento_ = false;  // ✅ Drone NÃO está mais pousando
       controlador_ativo_ = false;   // ✅ Reseta controlador para novo ciclo
-      state_voo_ = 0;               // ✅ Volta para ESTADO 0 (ativação)
 
       if (!offboard_activated_) {
         RCLCPP_INFO(this->get_logger(), "🔋 Ativando OFFBOARD+ARM para levantamento...\n");
@@ -225,8 +224,9 @@ private:
         activation_time_ = this->now();
       }
 
-      // ✅ NÃO define state_voo_ = 1 aqui!
-      // Deixa ESTADO 0 (control_loop) confirmar OFFBOARD+ARMED e então transicionar para ESTADO 1
+      // ✅ Vai direto para ESTADO 1 (decolagem) aguardando OFFBOARD+ARM confirmados
+      state_voo_ = 1;
+      takeoff_counter_ = 0;
 
       return;
     }
@@ -344,42 +344,13 @@ private:
     cycle_count_++;
 
     // ==========================================
-    // ESTADO 0: AGUARDANDO ATIVAÇÃO OFFBOARD+ARM
+    // ESTADO 0: AGUARDANDO NOVO WAYPOINT
     // ==========================================
     if (state_voo_ == 0) {
 
-      // ✅ Sempre publica setpoints para manter OFFBOARD ativo
-      pose_msg.pose.position.x = last_waypoint_goal_.pose.position.x;
-      pose_msg.pose.position.y = last_waypoint_goal_.pose.position.y;
-      pose_msg.pose.position.z = last_waypoint_goal_.pose.position.z;
-      pose_pub_->publish(pose_msg);
-
-      // ✅ Verifica se OFFBOARD+ARM foram confirmados
-      if (current_state_.mode == "OFFBOARD" && current_state_.armed) {
-        if (!activation_confirmed_) {
-          RCLCPP_INFO(this->get_logger(), "✅ DRONE ATIVADO! (OFFBOARD+ARMED)");
-          RCLCPP_INFO(this->get_logger(), "⬆️ Iniciando decolagem para 2.0m...\n");
-          activation_confirmed_ = true;
-        }
-        state_voo_ = 1;
-        takeoff_counter_ = 0;
-        return;
-      }
-
-      // ⏳ Timeout: se não ativar em 5 segundos, tenta novamente
-      if (offboard_activated_ && (this->now() - activation_time_).seconds() > 5.0) {
-        RCLCPP_WARN(this->get_logger(), "⚠️ Ativação pendente (OFFBOARD=%s | ARMED=%s), tentando novamente...",
-          current_state_.mode == "OFFBOARD" ? "✓" : "✗",
-          current_state_.armed ? "✓" : "✗");
-        request_offboard();
-        request_arm();
-        activation_time_ = this->now();
-      }
-
-      if (cycle_count_ % 500 == 0) {
-        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 10000,
-          "⏳ Aguardando waypoints de levantamento (Z > 0.5)...");
-      }
+      RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 10000,
+        "⏳ Aguardando novo comando de waypoint para decolar...");
+      // ✅ Não faz nada! Apenas aguarda novo waypoint em waypoints_callback()
     }
 
     // ==========================================
@@ -532,19 +503,25 @@ private:
 
         // ✅ Se passou 3 segundos desde que pouso foi detectado, pouso foi concluído!
         if ((this->now() - pouso_start_time_).seconds() > 3.0) {
-          RCLCPP_WARN(this->get_logger(), "\n✅ POUSO CONCLUÍDO! VOLTANDO A VOAR!");
-          RCLCPP_WARN(this->get_logger(), "⬆️ Iniciando nova decolagem...\n");
+          RCLCPP_WARN(this->get_logger(), "🔌 Solicitando DISARM...");
 
           // ✅ DISARM
           request_disarm();
 
-          // ✅ RESETAR FLAGS PARA NOVO CICLO
+          RCLCPP_WARN(this->get_logger(),
+            "\n✅ POUSO CONCLUÍDO! Aguardando novo comando de waypoint para decolar novamente...\n");
+
+          // ✅ Resetar TODAS as flags para estado limpo
+          state_voo_ = 0;
+          pouso_em_andamento_ = false;
+          controlador_ativo_ = false;
+          trajectory_started_ = false;
+          pouso_start_time_set_ = false;
           offboard_activated_ = false;
           activation_confirmed_ = false;
-          state_voo_ = 0;
           takeoff_counter_ = 0;
-          pouso_em_andamento_ = false;
-          pouso_start_time_set_ = false;
+          trajectory_waypoints_.clear();
+          current_waypoint_idx_ = 0;
           return;
         }
       }
@@ -577,7 +554,7 @@ private:
   mavros_msgs::msg::State current_state_;
 
   // Estado do controlador - MÁQUINA DE ESTADOS
-  int state_voo_;                    // 0=ativação, 1=decolagem, 2=hover, 3=trajetória, 4=pouso
+  int state_voo_;                    // 0=aguardando waypoint, 1=decolagem, 2=hover, 3=trajetória, 4=pouso
   bool controlador_ativo_;           // Trajetória está ativa?
   bool pouso_em_andamento_;          // Pouso em andamento?
   bool offboard_activated_;          // Ativação OFFBOARD+ARM foi disparada por waypoints?
