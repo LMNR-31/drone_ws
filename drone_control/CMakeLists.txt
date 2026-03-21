@@ -22,6 +22,7 @@ ament_target_dependencies(drone_activate_and_go_forward
   rclcpp
   geometry_msgs
   mavros_msgs
+  nav_msgs
 )
 
 install(TARGETS
