@@ -241,9 +241,9 @@ private:
     if (state_voo_ == 0) {
 
       // ✅ Sempre publica setpoints para manter OFFBOARD ativo
-      pose_msg.pose.position.x = 0.0;
-      pose_msg.pose.position.y = 0.0;
-      pose_msg.pose.position.z = 0.0;
+      pose_msg.pose.position.x = last_waypoint_goal_.pose.position.x;
+      pose_msg.pose.position.y = last_waypoint_goal_.pose.position.y;
+      pose_msg.pose.position.z = last_waypoint_goal_.pose.position.z;
       pose_pub_->publish(pose_msg);
 
       // ✅ Verifica se OFFBOARD+ARM foram confirmados
@@ -285,8 +285,8 @@ private:
     else if (state_voo_ == 1) {
 
       // ✅ Sempre publica setpoints
-      pose_msg.pose.position.x = 0.0;
-      pose_msg.pose.position.y = 0.0;
+      pose_msg.pose.position.x = last_waypoint_goal_.pose.position.x;
+      pose_msg.pose.position.y = last_waypoint_goal_.pose.position.y;
       pose_msg.pose.position.z = 2.0; // Levanta para 2m
       pose_pub_->publish(pose_msg);
 
@@ -294,6 +294,9 @@ private:
 
       if (takeoff_counter_ == 1) {
         RCLCPP_INFO(this->get_logger(), "⬆️ Decolando para 2.0 metros...");
+        RCLCPP_INFO(this->get_logger(), "   Posição: X=%.2f, Y=%.2f, Z=2.0",
+          last_waypoint_goal_.pose.position.x,
+          last_waypoint_goal_.pose.position.y);
       }
 
       // Aguarda 8 segundos (800 ciclos) para estabilizar
@@ -310,14 +313,16 @@ private:
     else if (state_voo_ == 2) {
 
       // ✅ Publica setpoint em hover
-      pose_msg.pose.position.x = 0.0;
-      pose_msg.pose.position.y = 0.0;
+      pose_msg.pose.position.x = last_waypoint_goal_.pose.position.x;
+      pose_msg.pose.position.y = last_waypoint_goal_.pose.position.y;
       pose_msg.pose.position.z = 2.0;
       pose_pub_->publish(pose_msg);
 
       if (cycle_count_ % 500 == 0) {
         RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 10000,
-          "🛸 Em HOVER (2.0m) | Aguardando waypoints... Controlador: %s",
+          "🛸 Em HOVER (2.0m) | Posição: X=%.2f, Y=%.2f | Aguardando waypoints... Controlador: %s",
+          last_waypoint_goal_.pose.position.x,
+          last_waypoint_goal_.pose.position.y,
           controlador_ativo_ ? "ATIVO" : "INATIVO");
       }
 
