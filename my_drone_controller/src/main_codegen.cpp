@@ -175,10 +175,11 @@ private:
         msg->poses[0].position.z);
 
       last_waypoint_goal_.pose = msg->poses[0];
+
+      // ✅ RESET: Limpa flags do ciclo anterior (CRUCIAL!)
       pouso_em_andamento_ = false;  // ✅ Drone NÃO está mais pousando
       controlador_ativo_ = false;   // ✅ Reseta controlador para novo ciclo
 
-      // ✅ Ativa OFFBOARD+ARM (uma única vez ao receber waypoint de levantamento)
       if (!offboard_activated_) {
         RCLCPP_INFO(this->get_logger(), "🔋 Ativando OFFBOARD+ARM para levantamento...\n");
         request_offboard();
@@ -191,9 +192,9 @@ private:
       state_voo_ = 1;
       takeoff_counter_ = 0;
 
-      RCLCPP_INFO(this->get_logger(), "⬆️ Iniciando decolagem para %.1fm...\n", last_waypoint_goal_.pose.position.z);
+      RCLCPP_INFO(this->get_logger(), "⬆️ Iniciando decolagem para 2.0m...\n");
 
-      return; // ✅ SAIR: Deixa state machine executar ESTADO 1
+      return;
     }
 
     // ==========================================
