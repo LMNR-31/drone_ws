@@ -102,6 +102,10 @@ public:
     trajectory_setpoint_[0] = 0.0;
     trajectory_setpoint_[1] = 0.0;
     trajectory_setpoint_[2] = 2.0;
+    trajectory_waypoints_.clear();
+    trajectory_started_ = false;
+    current_waypoint_idx_ = 0;
+    waypoint_duration_ = 4.0;
 
     RCLCPP_INFO(this->get_logger(), "\n📊 STATUS INICIAL:");
     RCLCPP_INFO(this->get_logger(), "   Estado: %d (ativação)", state_voo_);
@@ -229,7 +233,11 @@ private:
       }
       RCLCPP_INFO(this->get_logger(), " ");
 
-      // ✅ Primeira posição = posição de levantamento (para OFFSET)
+      // ✅ NOVO! Armazenar TODOS os waypoints em vetor persistente
+      trajectory_waypoints_ = msg->poses;
+      current_waypoint_idx_ = 0;
+      trajectory_started_ = false;
+
       last_waypoint_goal_.pose = msg->poses[0];
 
       // ✅ Processa trajetória e ativa controlador
@@ -426,31 +434,58 @@ private:
     // ==========================================
     else if (state_voo_ == 3) {
 
-      // ✅ VERIFICA POUSO - DETECTA AUTOMATICAMENTE
+      // ✅ Detectar pouso automaticamente
       if (pouso_em_andamento_ && !controlador_ativo_) {
         RCLCPP_WARN(this->get_logger(), "🛬 POUSO DETECTADO EM TRAJETÓRIA - PARANDO IMEDIATAMENTE!");
         state_voo_ = 4;
-        return; // ✅ CRUCIAL: NÃO publica mais!
+        return;
       }
 
-      // ✅ OFFSET: Trajetória começa da posição de levantamento (hover)
-      double offset_x = last_waypoint_goal_.pose.position.x;
-      double offset_y = last_waypoint_goal_.pose.position.y;
+      // ✅ INICIALIZAR trajetória na primeira execução
+      if (!trajectory_started_) {
+        if (trajectory_waypoints_.empty()) {
+          RCLCPP_WARN(this->get_logger(), "⚠️ Nenhum waypoint armazenado, voltando para ESTADO 2");
+          state_voo_ = 2;
+          return;
+        }
 
-      // ✅ Setpoint relativo (da trajetória) + offset = setpoint absoluto
-      pose_msg.pose.position.x = offset_x + trajectory_setpoint_[0];
-      pose_msg.pose.position.y = offset_y + trajectory_setpoint_[1];
-      pose_msg.pose.position.z = trajectory_setpoint_[2];
+        trajectory_start_time_ = this->now();
+        trajectory_started_ = true;
+        current_waypoint_idx_ = 0;
+
+        RCLCPP_INFO(this->get_logger(), "✈️ Trajetória iniciada! %zu waypoints | %.1f segundos cada",
+          trajectory_waypoints_.size(), waypoint_duration_);
+      }
+
+      // ✅ CALCULAR qual waypoint publicar baseado no tempo transcorrido
+      double elapsed_time = (this->now() - trajectory_start_time_).seconds();
+      int computed_idx = static_cast<int>(elapsed_time / waypoint_duration_);
+
+      // ✅ Limitar ao índice máximo (não ultrapassar último waypoint)
+      current_waypoint_idx_ = std::min(computed_idx, static_cast<int>(trajectory_waypoints_.size()) - 1);
+
+      // ✅ PUBLICAR waypoint ATUAL
+      auto current_waypoint = trajectory_waypoints_[current_waypoint_idx_];
+
+      pose_msg.pose.position.x = current_waypoint.position.x;
+      pose_msg.pose.position.y = current_waypoint.position.y;
+      pose_msg.pose.position.z = current_waypoint.position.z;
+      pose_msg.pose.orientation.w = 1.0;
       pose_pub_->publish(pose_msg);
 
+      // ✅ LOG: Mostrar progresso da trajetória
       if (cycle_count_ % 500 == 0) {
+        double total_time = waypoint_duration_ * (double)trajectory_waypoints_.size();
+        double progress_pct = (elapsed_time / total_time) * 100.0;
+
         RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 10000,
-          "📡 Trajetória em execução | X: %.2fm, Y: %.2fm, Z: %.2fm (offset: %.2f, %.2f)",
+          "📡 Trajetória em execução | WP[%d/%zu]: X=%.2fm, Y=%.2fm, Z=%.2fm | %.1f%% concluído",
+          current_waypoint_idx_,
+          trajectory_waypoints_.size() - 1,
           pose_msg.pose.position.x,
           pose_msg.pose.position.y,
           pose_msg.pose.position.z,
-          offset_x,
-          offset_y);
+          progress_pct);
       }
     }
 
@@ -537,6 +572,13 @@ private:
 
   // Setpoints da trajetória (coordenadas relativas ao ponto de hover)
   double trajectory_setpoint_[3];
+
+  // Waypoints da trajetória (5 pontos de descida)
+  std::vector<geometry_msgs::msg::Pose> trajectory_waypoints_;
+  rclcpp::Time trajectory_start_time_;   // Quando trajetória começou
+  bool trajectory_started_;              // Trajetória já iniciou?
+  int current_waypoint_idx_;             // Qual waypoint estamos (0-4)
+  double waypoint_duration_;             // Tempo em cada waypoint (segundos)
 
   // Sincronização thread-safe
   std::mutex mutex_;
