@@ -419,11 +419,21 @@ private:
           last_waypoint_goal_.pose.position.y);
       }
 
-      // Aguarda 8 segundos (800 ciclos) para estabilizar
-      if (takeoff_counter_ > 800) {
+      // ✅ Verifica se drone chegou em Z ~= 2.0m usando odometria real
+      // Margem de 0.05m abaixo do alvo (1.95m) para ter segurança
+      if (current_z_real_ >= 1.95) {
+        RCLCPP_INFO(this->get_logger(), "✅ Decolagem concluída! Altitude = %.2fm\n", current_z_real_);
         state_voo_ = 2;
         takeoff_counter_ = 0;
-        RCLCPP_INFO(this->get_logger(), "✅ Decolagem concluída! Altitude = 2.0m\n");
+        return;
+      }
+
+      // ✅ Log de debug a cada 100 ciclos (1 segundo @ 100Hz)
+      if (takeoff_counter_ % 100 == 0) {
+        RCLCPP_INFO(this->get_logger(),
+          "📈 Decolando... Z_alvo=2.0m | Z_real=%.2fm | Tempo=%.1fs",
+          current_z_real_,
+          (double)takeoff_counter_ / 100.0);
       }
     }
 
