@@ -89,8 +89,8 @@ public:
     controlador_ativo_ = false;
     pouso_em_andamento_ = false;
     cycle_count_ = 0;
-    offboard_requested_ = false;
-    arm_requested_ = false;
+    offboard_activated_ = false;
+    activation_confirmed_ = false;
     takeoff_counter_ = 0;
     waypoint_goal_received_ = false;
     last_waypoint_goal_.pose.position.x = 0.0;
@@ -157,7 +157,7 @@ private:
       return;
     }
 
-    // ✅ TRAJETÓRIA NORMAL
+    // ✅ WAYPOINTS DE LEVANTAMENTO (Z > 0.5)
     RCLCPP_INFO(this->get_logger(), "\n📍 WAYPOINTS RECEBIDOS: %zu pontos", msg->poses.size());
     for (size_t i = 0; i < msg->poses.size(); i++) {
       RCLCPP_INFO(this->get_logger(), 
@@ -168,6 +168,16 @@ private:
         msg->poses[i].position.z);
     }
     RCLCPP_INFO(this->get_logger(), " ");
+
+    // ✅ ATIVA OFFBOARD+ARM (uma única vez ao receber waypoints de levantamento)
+    // Nota: chegamos aqui somente se last_z >= 0.5 (o bloco de pouso já fez return acima)
+    if (!offboard_activated_) {
+      RCLCPP_INFO(this->get_logger(), "🔋 Ativando OFFBOARD+ARM para levantamento...\n");
+      request_offboard();
+      request_arm();
+      offboard_activated_ = true;
+      activation_time_ = this->now();
+    }
 
     controlador_ativo_ = true;
     pouso_em_andamento_ = false;
@@ -226,7 +236,7 @@ private:
     cycle_count_++;
 
     // ==========================================
-    // ESTADO 0: ATIVAÇÃO (OFFBOARD + ARM)
+    // ESTADO 0: AGUARDANDO ATIVAÇÃO OFFBOARD+ARM
     // ==========================================
     if (state_voo_ == 0) {
 
@@ -236,40 +246,36 @@ private:
       pose_msg.pose.position.z = 0.0;
       pose_pub_->publish(pose_msg);
 
-      // Verifica se já está OFFBOARD+ARMED
+      // ✅ Verifica se OFFBOARD+ARM foram confirmados
       if (current_state_.mode == "OFFBOARD" && current_state_.armed) {
-        if (!offboard_requested_ && !arm_requested_) {
-          RCLCPP_INFO(this->get_logger(), "\n✅ OFFBOARD + ARM JÁ CONFIRMADOS!");
-          RCLCPP_INFO(this->get_logger(), "⬆️ Iniciando decolagem...\n");
+        if (!activation_confirmed_) {
+          RCLCPP_INFO(this->get_logger(), "✅ DRONE ATIVADO! (OFFBOARD+ARMED)");
+          RCLCPP_INFO(this->get_logger(), "⬆️ Iniciando decolagem para 2.0m...\n");
+          activation_confirmed_ = true;
         }
         state_voo_ = 1;
-        offboard_requested_ = false;
-        arm_requested_ = false;
+        takeoff_counter_ = 0;
         return;
       }
 
-      // Solicita OFFBOARD a cada 50 ciclos
-      if (cycle_count_ % 50 == 0) {
-        if (current_state_.mode != "OFFBOARD") {
-          request_offboard();
-          offboard_requested_ = true;
-        }
+      // ⏳ Timeout: se não ativar em 5 segundos, tenta novamente
+      if (offboard_activated_ && (this->now() - activation_time_).seconds() > 5.0) {
+        RCLCPP_WARN(this->get_logger(), "⚠️ Ativação pendente (OFFBOARD=%s | ARMED=%s), tentando novamente...",
+          current_state_.mode == "OFFBOARD" ? "✓" : "✗",
+          current_state_.armed ? "✓" : "✗");
+        request_offboard();
+        request_arm();
+        activation_time_ = this->now();
       }
 
-      // Solicita ARM a cada 100 ciclos (após OFFBOARD)
-      if (cycle_count_ % 100 == 0) {
-        if (!current_state_.armed) {
-          request_arm();
-          arm_requested_ = true;
-        }
-      }
-
-      // Log de status
-      if (cycle_count_ % 200 == 0) {
+      // Log periódico
+      if (cycle_count_ % 200 == 0 && offboard_activated_) {
         RCLCPP_INFO(this->get_logger(), 
           "⏳ Ativação: OFFBOARD=%s | ARMED=%s",
           current_state_.mode == "OFFBOARD" ? "✓" : "✗",
           current_state_.armed ? "✓" : "✗");
+      } else if (cycle_count_ % 200 == 0) {
+        RCLCPP_INFO(this->get_logger(), "⏳ Aguardando waypoints de levantamento (Z > 0.5)...");
       }
     }
 
@@ -370,7 +376,11 @@ private:
       if (!pouso_em_andamento_ && controlador_ativo_) {
         RCLCPP_WARN(this->get_logger(), "\n✅ POUSO CONCLUÍDO! VOLTANDO A VOAR!");
         RCLCPP_WARN(this->get_logger(), "⬆️ Iniciando nova decolagem...\n");
-        state_voo_ = 1; // ✅ VOLTA PARA DECOLAGEM!
+
+        // ✅ RESETAR FLAGS PARA NOVO CICLO
+        offboard_activated_ = false;
+        activation_confirmed_ = false;
+        state_voo_ = 0;  // Volta para ativação
         takeoff_counter_ = 0;
         return;
       }
@@ -405,8 +415,9 @@ private:
   int state_voo_;                    // 0=ativação, 1=decolagem, 2=hover, 3=trajetória, 4=pouso
   bool controlador_ativo_;           // Trajetória está ativa?
   bool pouso_em_andamento_;          // Pouso em andamento?
-  bool offboard_requested_;          // OFFBOARD foi solicitado?
-  bool arm_requested_;               // ARM foi solicitado?
+  bool offboard_activated_;          // Ativação OFFBOARD+ARM foi disparada por waypoints?
+  bool activation_confirmed_;        // OFFBOARD+ARM confirmados?
+  rclcpp::Time activation_time_;     // Timestamp da última solicitação de ativação
   int cycle_count_;                  // Contador de ciclos
   int takeoff_counter_;              // Contador de decolagem
 
