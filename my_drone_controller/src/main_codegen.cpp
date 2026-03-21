@@ -179,6 +179,7 @@ private:
       // ✅ RESET: Limpa flags do ciclo anterior (CRUCIAL!)
       pouso_em_andamento_ = false;  // ✅ Drone NÃO está mais pousando
       controlador_ativo_ = false;   // ✅ Reseta controlador para novo ciclo
+      state_voo_ = 0;               // ✅ Volta para ESTADO 0 (ativação)
 
       if (!offboard_activated_) {
         RCLCPP_INFO(this->get_logger(), "🔋 Ativando OFFBOARD+ARM para levantamento...\n");
