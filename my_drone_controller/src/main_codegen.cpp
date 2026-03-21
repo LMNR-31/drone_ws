@@ -5,6 +5,7 @@
 #include "mavros_msgs/srv/command_bool.hpp"
 #include "mavros_msgs/msg/state.hpp" 
 #include <vector>
+#include <cmath>
 #include <mutex>
 #include <atomic>
 
@@ -91,6 +92,7 @@ public:
     offboard_requested_ = false;
     arm_requested_ = false;
     takeoff_counter_ = 0;
+    waypoint_goal_received_ = false;
 
     RCLCPP_INFO(this->get_logger(), "\n📊 STATUS INICIAL:");
     RCLCPP_INFO(this->get_logger(), "   Estado: %d (ativação)", state_voo_);
@@ -174,6 +176,8 @@ private:
   void waypoint_goal_callback(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
     std::lock_guard<std::mutex> lock(mutex_);
 
+    double x = msg->pose.position.x;
+    double y = msg->pose.position.y;
     double z = msg->pose.position.z;
 
     // ✅ DETECTA POUSO
@@ -186,11 +190,21 @@ private:
       return;
     }
 
-    // ✅ PONTO ÚNICO RECEBIDO
-    RCLCPP_INFO(this->get_logger(), "\n📍 WAYPOINT ÚNICO RECEBIDO: X=%.2f, Y=%.2f, Z=%.2f",
-      msg->pose.position.x,
-      msg->pose.position.y,
-      z);
+    // ✅ IGNORA DUPLICATAS
+    const double eps = 1e-9;
+    if (waypoint_goal_received_ &&
+        std::abs(x - last_waypoint_goal_.pose.position.x) < eps &&
+        std::abs(y - last_waypoint_goal_.pose.position.y) < eps &&
+        std::abs(z - last_waypoint_goal_.pose.position.z) < eps) {
+      RCLCPP_DEBUG(this->get_logger(), "⚠️ Waypoint duplicado ignorado: X=%.2f, Y=%.2f, Z=%.2f", x, y, z);
+      return;
+    }
+
+    // ✅ NOVO WAYPOINT RECEBIDO
+    RCLCPP_INFO(this->get_logger(), "\n📍 NOVO WAYPOINT RECEBIDO: X=%.2f, Y=%.2f, Z=%.2f", x, y, z);
+
+    last_waypoint_goal_ = *msg;
+    waypoint_goal_received_ = true;
 
     controlador_ativo_ = true;
     pouso_em_andamento_ = false;
@@ -389,6 +403,10 @@ private:
   bool arm_requested_;               // ARM foi solicitado?
   int cycle_count_;                  // Contador de ciclos
   int takeoff_counter_;              // Contador de decolagem
+
+  // Rastreamento do último waypoint único recebido (para ignorar duplicatas)
+  geometry_msgs::msg::PoseStamped last_waypoint_goal_;
+  bool waypoint_goal_received_;      // Recebeu ao menos um waypoint_goal?
 
   // Sincronização thread-safe
   std::mutex mutex_;
