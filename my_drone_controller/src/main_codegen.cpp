@@ -227,21 +227,20 @@ private:
       RCLCPP_INFO(this->get_logger(), "   state_voo_=%d", state_voo_);
       RCLCPP_INFO(this->get_logger(), "   activation_confirmed_=%d", activation_confirmed_);
 
-      if (!offboard_activated_) {
-        RCLCPP_INFO(this->get_logger(), "🔋 Ativando OFFBOARD+ARM para levantamento...\n");
-        request_offboard();
-        request_arm();
-        offboard_activated_ = true;
-        activation_time_ = this->now();
-      } else {
-        RCLCPP_WARN(this->get_logger(), "⚠️ AVISO: offboard_activated_ já está TRUE!");
-        RCLCPP_WARN(this->get_logger(), "   Forçando reset e reativação...");
-        offboard_activated_ = false;
-        request_offboard();
-        request_arm();
-        offboard_activated_ = true;
-        activation_time_ = this->now();
-      }
+      // ✅ SEMPRE força reativação, independentemente do estado anterior
+      RCLCPP_INFO(this->get_logger(), "🔋 Ativando OFFBOARD+ARM para levantamento...\n");
+
+      // ✅ Reset explícito ANTES de reativar
+      offboard_activated_ = false;
+      activation_confirmed_ = false;
+
+      // ✅ Solicita OFFBOARD MODE e ARM
+      request_offboard();
+      request_arm();
+
+      // ✅ Marca como ativado e aguarda confirmação do FCU
+      offboard_activated_ = true;
+      activation_time_ = this->now();
 
       // ✅ Vai direto para ESTADO 1 (decolagem) aguardando OFFBOARD+ARM confirmados
       state_voo_ = 1;
