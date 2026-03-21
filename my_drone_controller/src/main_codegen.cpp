@@ -313,14 +313,31 @@ private:
         activation_time_ = this->now();
       }
 
-      // Log periódico
-      if (cycle_count_ % 200 == 0 && offboard_activated_) {
+      // 🔍 LOG DE DEBUG DETALHADO: A cada 100 ciclos
+      if (cycle_count_ % 100 == 0) {
+        RCLCPP_WARN(this->get_logger(), 
+          "🔍 STATE 0 DEBUG | Modo: %s | ARMED: %s | offboard_ativado: %s | confirmado: %s | tempo: %.1fs",
+          current_state_.mode.c_str(),
+          current_state_.armed ? "✓" : "✗",
+          offboard_activated_ ? "✓" : "✗",
+          activation_confirmed_ ? "✓" : "✗",
+          offboard_activated_ ? (this->now() - activation_time_).seconds() : 0.0);
+      }
+
+      // 📍 LOG DE POSIÇÃO: A cada 200 ciclos
+      if (cycle_count_ % 200 == 0) {
         RCLCPP_INFO(this->get_logger(), 
-          "⏳ Ativação: OFFBOARD=%s | ARMED=%s",
-          current_state_.mode == "OFFBOARD" ? "✓" : "✗",
-          current_state_.armed ? "✓" : "✗");
-      } else if (cycle_count_ % 200 == 0) {
-        RCLCPP_INFO(this->get_logger(), "⏳ Aguardando waypoints de levantamento (Z > 0.5)...");
+          "📍 Publicando setpoint: X=%.2f, Y=%.2f, Z=%.2f",
+          pose_msg.pose.position.x,
+          pose_msg.pose.position.y,
+          pose_msg.pose.position.z);
+      }
+
+      // ⏱️ LOG DE TIMEOUT: Se passou 5 segundos sem ativar
+      if (offboard_activated_ && (this->now() - activation_time_).seconds() > 5.0 && cycle_count_ % 50 == 0) {
+        RCLCPP_WARN(this->get_logger(), 
+          "⏱️ TIMEOUT! Esperando ativação por %.1f segundos",
+          (this->now() - activation_time_).seconds());
       }
     }
 
