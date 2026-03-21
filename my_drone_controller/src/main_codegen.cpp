@@ -399,19 +399,57 @@ private:
     // ==========================================
     else if (state_voo_ == 1) {
 
-      // ✅ VERIFICAÇÃO DE SEGURANÇA: Se chegou em ESTADO 1 mas OFFBOARD não foi ativado, ativar!
+      // ==========================================
+      // CAMADA 1: SOLICITAR OFFBOARD+ARM
+      // ==========================================
       if (!offboard_activated_) {
-        RCLCPP_WARN(this->get_logger(), "⚠️ ESTADO 1 SEM OFFBOARD ATIVADO! Forçando ativação...");
+        RCLCPP_INFO(this->get_logger(), "📡 Solicitando OFFBOARD+ARM...");
         request_offboard();
         request_arm();
         offboard_activated_ = true;
         activation_time_ = this->now();
+        return;  // Aguarda próximo ciclo
       }
 
-      // ✅ Sempre publica setpoints
+      // ==========================================
+      // CAMADA 2: VERIFICAR CONFIRMAÇÃO DO FCU
+      // ==========================================
+      if (!activation_confirmed_) {
+        if (current_state_.armed && current_state_.mode == "OFFBOARD") {
+          RCLCPP_INFO(this->get_logger(),
+            "✅ OFFBOARD+ARM CONFIRMADOS! Iniciando decolagem...");
+          activation_confirmed_ = true;
+          takeoff_counter_ = 0;  // Reset contador para começar decolagem
+        } else if ((this->now() - activation_time_).seconds() > 5.0) {
+          // Timeout: tentar novamente
+          RCLCPP_WARN(this->get_logger(),
+            "⚠️ Timeout ativação OFFBOARD+ARM (5 segundos)! Tentando novamente...");
+          RCLCPP_WARN(this->get_logger(),
+            "   Estado: armed=%d | mode=%s",
+            current_state_.armed,
+            current_state_.mode.c_str());
+          offboard_activated_ = false;
+          activation_confirmed_ = false;
+          takeoff_counter_ = 0;
+          return;
+        } else {
+          // Ainda aguardando confirmação
+          RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+            "⏳ Aguardando OFFBOARD+ARM... | armed=%d | mode=%s",
+            current_state_.armed,
+            current_state_.mode.c_str());
+          takeoff_counter_++;
+          return;  // NÃO publica até confirmar
+        }
+      }
+
+      // ==========================================
+      // CAMADA 3: PUBLICAR SETPOINT DE DECOLAGEM
+      // ==========================================
+      // Só publica Z=2.0m após confirmação do FCU
       pose_msg.pose.position.x = last_waypoint_goal_.pose.position.x;
       pose_msg.pose.position.y = last_waypoint_goal_.pose.position.y;
-      pose_msg.pose.position.z = 2.0; // Levanta para 2m
+      pose_msg.pose.position.z = 2.0;  // Levanta para 2m
       pose_pub_->publish(pose_msg);
 
       takeoff_counter_++;
@@ -423,21 +461,22 @@ private:
           last_waypoint_goal_.pose.position.y);
       }
 
-      // ✅ Verifica se drone chegou em Z ~= 2.0m usando odometria real
-      // Margem de 0.05m abaixo do alvo (1.95m) para ter segurança
-      if (current_z_real_ >= 1.95) {
-        RCLCPP_INFO(this->get_logger(), "✅ Decolagem concluída! Altitude = %.2fm\n", current_z_real_);
-        state_voo_ = 2;
-        takeoff_counter_ = 0;
-        return;
-      }
-
-      // ✅ Log de debug a cada 100 ciclos (1 segundo @ 100Hz)
+      // Log de progresso a cada 100 ciclos (1 segundo @ 100Hz)
       if (takeoff_counter_ % 100 == 0) {
         RCLCPP_INFO(this->get_logger(),
           "📈 Decolando... Z_alvo=2.0m | Z_real=%.2fm | Tempo=%.1fs",
           current_z_real_,
           (double)takeoff_counter_ / 100.0);
+      }
+
+      // Verifica se drone chegou em Z ~= 2.0m usando odometria real
+      // Margem de 0.05m abaixo do alvo (1.95m) para segurança
+      if (current_z_real_ >= 1.95) {
+        RCLCPP_INFO(this->get_logger(),
+          "✅ Decolagem concluída! Altitude = %.2fm\n", current_z_real_);
+        state_voo_ = 2;
+        takeoff_counter_ = 0;
+        return;
       }
     }
 
