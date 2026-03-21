@@ -3,6 +3,8 @@
 #include <mavros_msgs/msg/state.hpp>
 #include <mavros_msgs/srv/command_bool.hpp>
 #include <nav_msgs/msg/odometry.hpp>
+#include <geometry_msgs/msg/pose_array.hpp>
+#include <cmath>
 
 using namespace std::chrono_literals;
 
@@ -24,6 +26,12 @@ public:
 
     disarm_client_ = this->create_client<mavros_msgs::srv::CommandBool>(
       "/uav1/mavros/cmd/arming");
+
+    waypoints_sub_ = this->create_subscription<geometry_msgs::msg::PoseArray>(
+      "/waypoints", 1,
+      std::bind(&DroneSoftLand::waypointsCb, this, std::placeholders::_1));
+
+    landing_waypoints_.clear();
 
     target_.coordinate_frame = mavros_msgs::msg::PositionTarget::FRAME_LOCAL_NED;
 
@@ -52,8 +60,29 @@ private:
     state_received_ = true; // ✅ Flag para confirmar que recebeu estado
   }
 
+  void waypointsCb(const geometry_msgs::msg::PoseArray::SharedPtr msg)
+  {
+    if (msg->poses.size() < 2) {
+      RCLCPP_WARN(this->get_logger(), "❌ Waypoints insuficientes para pouso");
+      return;
+    }
+
+    landing_waypoints_ = msg->poses;
+
+    auto landing_point = landing_waypoints_.back();
+
+    RCLCPP_INFO(this->get_logger(), "✅ Waypoints de pouso recebidos!");
+    RCLCPP_INFO(this->get_logger(),
+      "   Ponto de pouso: X=%.2f, Y=%.2f, Z=%.2f",
+      landing_point.position.x,
+      landing_point.position.y,
+      landing_point.position.z);
+  }
+
   void odomCb(const nav_msgs::msg::Odometry::SharedPtr msg)
   {
+    x_ = msg->pose.pose.position.x;
+    y_ = msg->pose.pose.position.y;
     z_ = msg->pose.pose.position.z;
     odom_received_ = true; // ✅ Flag para confirmar que recebeu odometria
   }
@@ -70,15 +99,28 @@ private:
       return;
     }
 
-    // ✅ INICIALIZA altitude alvo (so acontece UMA VEZ)
+    // ✅ INICIALIZA altitude alvo e obtém ponto de pouso (só acontece UMA VEZ)
     if (!initialized_ && z_ > 0.05)
     {
       target_z_ = z_;
+
+      if (!landing_waypoints_.empty()) {
+        target_x_ = landing_waypoints_.back().position.x;
+        target_y_ = landing_waypoints_.back().position.y;
+        RCLCPP_INFO(this->get_logger(),
+          "🎯 Voando para ponto de pouso: (%.2f, %.2f)", target_x_, target_y_);
+      } else {
+        target_x_ = x_;
+        target_y_ = y_;
+        RCLCPP_WARN(this->get_logger(),
+          "⚠️ Nenhum waypoint recebido, usando posição atual: (%.2f, %.2f)", target_x_, target_y_);
+      }
+
       target_.position.z = z_;
       target_.yaw = 0.0;
       initialized_ = true;
 
-      RCLCPP_INFO(this->get_logger(), "✓ Altitude inicial detectada: %.2f m", z_);
+      RCLCPP_INFO(this->get_logger(), "✓ Altitude inicial: %.2f m", z_);
       RCLCPP_INFO(this->get_logger(), "🛬 Iniciando descida...");
     }
 
@@ -90,18 +132,43 @@ private:
     // ✅ POUSO PROGRESSIVO - SEMPRE DESCE, NÃO IMPORTA ESTADO DO DRONE
     if (!landed_)
     {
-      target_z_ -= descent_speed_; // Desce progressivamente
+      // Movimenta XY progressivamente para o ponto de pouso
+      double dx = target_x_ - x_;
+      double dy = target_y_ - y_;
+      double dist_xy = std::sqrt(dx * dx + dy * dy);
+
+      const double horizontal_speed = 0.2;       // m/ciclo
+      const double xy_tolerance = 0.3;           // m - tolerância para considerar chegada ao ponto XY
+      const double min_dist_threshold = 0.01;    // m - evita divisão por zero
+
+      if (dist_xy > xy_tolerance) {
+        double ratio = std::min(1.0, horizontal_speed / std::max(dist_xy, min_dist_threshold));
+        target_.position.x = x_ + dx * ratio;
+        target_.position.y = y_ + dy * ratio;
+
+        if (cycle_count_ % 20 == 0) {
+          RCLCPP_INFO(this->get_logger(),
+            "🎯 Movendo XY: dist=%.2f | Posição atual=(%.2f, %.2f) | Alvo=(%.2f, %.2f)",
+            dist_xy, x_, y_, target_x_, target_y_);
+        }
+      } else {
+        target_.position.x = target_x_;
+        target_.position.y = target_y_;
+      }
+
+      // Descida em Z (paralela ao movimento XY)
+      target_z_ -= descent_speed_;
 
       if (target_z_ < 0.05)
-        target_z_ = 0.05; // Para no solo
+        target_z_ = 0.05;
 
       target_.position.z = target_z_;
       target_.yaw = 0.0;
 
       if (cycle_count_ % 20 == 0)
       {
-        RCLCPP_INFO(this->get_logger(), "📍 Descendo... Z_alvo=%.2f | Z_real=%.2f m", 
-          target_z_, z_);
+        RCLCPP_INFO(this->get_logger(), "📍 Descendo e movendo... Z_alvo=%.2f | Z_real=%.2f | Dist_XY=%.2f m",
+          target_z_, z_, dist_xy);
       }
 
       // ✅ Detecta quando chegou no solo (usando odometria real)
@@ -110,6 +177,7 @@ private:
         landed_ = true;
         landed_time_ = this->now();
         RCLCPP_INFO(this->get_logger(), "✅ Solo detectado! Z_real = %.2f m", z_);
+        RCLCPP_INFO(this->get_logger(), "✅ Pouso concluído em: (%.2f, %.2f, %.2f)", x_, y_, z_);
         RCLCPP_INFO(this->get_logger(), "🛑 Solicitando DISARM...");
         requestDisarm();
       }
@@ -117,12 +185,14 @@ private:
     else
     {
       // ✅ MANTER NO SOLO
+      target_.position.x = target_x_;
+      target_.position.y = target_y_;
       target_.position.z = 0.05;
       double dt = (this->now() - landed_time_).seconds();
 
       if (cycle_count_ % 20 == 0)
       {
-        RCLCPP_INFO(this->get_logger(), "⏳ No solo por %.1f segundos | Z=%.2f m", dt, z_);
+        RCLCPP_INFO(this->get_logger(), "⏳ No solo por %.1f s | Posição: (%.2f, %.2f, %.2f)", dt, x_, y_, z_);
       }
 
       // ✅ DESARM após 2 segundos
@@ -161,6 +231,7 @@ private:
   // Subscrições
   rclcpp::Subscription<mavros_msgs::msg::State>::SharedPtr state_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr waypoints_sub_;
   rclcpp::Publisher<mavros_msgs::msg::PositionTarget>::SharedPtr setpoint_pub_;
   rclcpp::Client<mavros_msgs::srv::CommandBool>::SharedPtr disarm_client_;
   rclcpp::TimerBase::SharedPtr timer_;
@@ -169,8 +240,15 @@ private:
   mavros_msgs::msg::State state_;
   mavros_msgs::msg::PositionTarget target_;
 
+  // Dados de waypoints
+  std::vector<geometry_msgs::msg::Pose> landing_waypoints_;
+
   // Estados
+  double x_{0.0};
+  double y_{0.0};
   double z_{5.0};
+  double target_x_{0.0};
+  double target_y_{0.0};
   double target_z_{5.0};
   bool initialized_{false};
   bool landed_{false};
