@@ -188,11 +188,8 @@ private:
         activation_time_ = this->now();
       }
 
-      // ✅ FORÇA ESTADO 1: DECOLAGEM
-      state_voo_ = 1;
-      takeoff_counter_ = 0;
-
-      RCLCPP_INFO(this->get_logger(), "⬆️ Iniciando decolagem para 2.0m...\n");
+      // ✅ NÃO define state_voo_ = 1 aqui!
+      // Deixa ESTADO 0 (control_loop) confirmar OFFBOARD+ARMED e então transicionar para ESTADO 1
 
       return;
     }
