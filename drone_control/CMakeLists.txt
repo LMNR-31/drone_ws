@@ -14,30 +14,18 @@ find_package(mavros_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 
 
-add_executable(drone_activator src/drone_activator.cpp)
+# Adicionar no final do arquivo drone_control/CMakeLists.txt:
 
-ament_target_dependencies(drone_activator
+add_executable(drone_activate_and_go_forward src/drone_activate_and_go_forward.cpp)
+
+ament_target_dependencies(drone_activate_and_go_forward
   rclcpp
   geometry_msgs
   mavros_msgs
 )
 
-target_compile_features(drone_activator PUBLIC cxx_std_17)
-
 install(TARGETS
-  drone_activator
-  DESTINATION lib/${PROJECT_NAME}
-)
-
-add_executable(drone_go_forward src/drone_go_forward.cpp )
-
-ament_target_dependencies(drone_go_forward
-  rclcpp
-  mavros_msgs
-)
-
-install(TARGETS
-  drone_go_forward
+  drone_activate_and_go_forward
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -59,6 +47,17 @@ ament_target_dependencies(mission_manager rclcpp)
 
 install(TARGETS
   mission_manager
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+add_executable(drone_publish_landing_waypoints src/drone_publish_landing_waypoints.cpp)
+
+ament_target_dependencies(drone_publish_landing_waypoints
+  rclcpp
+  geometry_msgs
+)
+
+install(TARGETS drone_publish_landing_waypoints
   DESTINATION lib/${PROJECT_NAME}
 )
 

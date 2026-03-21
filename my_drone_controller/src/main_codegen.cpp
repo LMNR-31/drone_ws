@@ -17,6 +17,7 @@ public:
     RCLCPP_INFO(this->get_logger(), "╔════════════════════════════════════════════════════════════╗");
     RCLCPP_INFO(this->get_logger(), "║  🚁 CONTROLADOR INTELIGENTE DE DRONE - VERSÃO FINAL      ║");
     RCLCPP_INFO(this->get_logger(), "║     COM ATIVAÇÃO OFFBOARD + ARM + DETECÇÃO DE POUSO     ║");
+    RCLCPP_INFO(this->get_logger(), "║               345 LINHAS - CÓDIGO COMPLETO               ║");
     RCLCPP_INFO(this->get_logger(), "╚════════════════════════════════════════════════════════════╝\n");
 
     // ==========================================
@@ -106,6 +107,7 @@ private:
     request->custom_mode = "OFFBOARD";
 
     mode_client_->async_send_request(request);
+    RCLCPP_INFO(this->get_logger(), "📡 Solicitando OFFBOARD MODE...");
   }
 
   // ==========================================
@@ -120,6 +122,7 @@ private:
     request->value = true; // true = armar, false = desarmar
 
     arm_client_->async_send_request(request);
+    RCLCPP_INFO(this->get_logger(), "🔋 Solicitando ARM...");
   }
 
   // ==========================================
@@ -136,10 +139,11 @@ private:
     // ✅ DETECTA POUSO
     double last_z = msg->poses.back().position.z;
     if (last_z < 0.5) {
-      RCLCPP_WARN(this->get_logger(), "\n🛬 POUSO DETECTADO! Z_final = %.2f m", last_z);
+      RCLCPP_WARN(this->get_logger(), "\n🛬🛬🛬 POUSO DETECTADO! Z_final = %.2f m", last_z);
       pouso_em_andamento_ = true;
       controlador_ativo_ = false;
-      RCLCPP_INFO(this->get_logger(), "🛬 CONTROLADOR DESLIGADO - DEIXANDO drone_soft_land POUSAR\n");
+      state_voo_ = 4; // ✅ VAI DIRETO PARA ESTADO 4!
+      RCLCPP_WARN(this->get_logger(), "🛬 CONTROLADOR DESLIGADO - DEIXANDO drone_soft_land POUSAR\n");
       return;
     }
 
@@ -199,7 +203,6 @@ private:
         if (current_state_.mode != "OFFBOARD") {
           request_offboard();
           offboard_requested_ = true;
-          RCLCPP_INFO(this->get_logger(), "📡 Solicitando OFFBOARD MODE...");
         }
       }
 
@@ -208,7 +211,6 @@ private:
         if (!current_state_.armed) {
           request_arm();
           arm_requested_ = true;
-          RCLCPP_INFO(this->get_logger(), "🔋 Solicitando ARM...");
         }
       }
 
@@ -268,6 +270,13 @@ private:
         state_voo_ = 3;
         RCLCPP_INFO(this->get_logger(), "✈️ Iniciando execução de trajetória...\n");
       }
+
+      // ✅ SE DETECTAR POUSO NESTE ESTADO
+      if (pouso_em_andamento_) {
+        RCLCPP_WARN(this->get_logger(), "🛬 POUSO DETECTADO NO HOVER - DESLIGANDO!");
+        state_voo_ = 4;
+        return;
+      }
     }
 
     // ==========================================
@@ -277,12 +286,12 @@ private:
 
       // ✅ VERIFICA POUSO - DETECTA AUTOMATICAMENTE
       if (pouso_em_andamento_ && !controlador_ativo_) {
-        RCLCPP_WARN(this->get_logger(), "🛬 POUSO DETECTADO - CONTROLADOR PARANDO");
+        RCLCPP_WARN(this->get_logger(), "🛬 POUSO DETECTADO EM TRAJETÓRIA - PARANDO IMEDIATAMENTE!");
         state_voo_ = 4;
-        return;
+        return; // ✅ CRUCIAL: NÃO publica mais!
       }
 
-      // Mantém drone em posição fixa
+      // Mantém drone em posição fixa (aguardando waypoints)
       pose_msg.pose.position.x = 0.0;
       pose_msg.pose.position.y = 0.0;
       pose_msg.pose.position.z = 2.0;
@@ -295,17 +304,25 @@ private:
     }
 
     // ==========================================
-    // ESTADO 4: POUSO/PAUSADO
+    // ESTADO 4: POUSO/PAUSADO - NÃO PUBLICA
     // ==========================================
     else if (state_voo_ == 4) {
-
       if (cycle_count_ % 500 == 0) {
         RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 10000,
           "🛑 CONTROLADOR PAUSADO | drone_soft_land fazendo pouso...");
       }
 
-      // ✅ NÃO publica nada durante pouso
-      return;
+      // ✅ VERIFICA SE POUSO TERMINOU
+      // Se recebeu novos waypoints com Z > 0.5, volta a voar!
+      if (!pouso_em_andamento_ && controlador_ativo_) {
+        RCLCPP_WARN(this->get_logger(), "\n✅ POUSO CONCLUÍDO! VOLTANDO A VOAR!");
+        RCLCPP_WARN(this->get_logger(), "⬆️ Iniciando nova decolagem...\n");
+        state_voo_ = 1; // ✅ VOLTA PARA DECOLAGEM!
+        takeoff_counter_ = 0;
+        return;
+      }
+
+      return; // NÃO publica nada durante pouso
     }
   }
 

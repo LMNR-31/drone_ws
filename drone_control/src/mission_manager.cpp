@@ -2,7 +2,6 @@
 #include <thread>
 #include <chrono>
 #include <cstdlib>
-#include <iostream>
 
 using namespace std::chrono_literals;
 
@@ -11,12 +10,10 @@ class MissionManager : public rclcpp::Node
 public:
   MissionManager() : Node("mission_manager")
   {
-    // Inicia a sequência após 2 segundos
     timer_ = this->create_wall_timer(
       2s, std::bind(&MissionManager::startMission, this));
 
     RCLCPP_INFO(this->get_logger(), "🎯 Mission Manager Iniciado");
-    RCLCPP_INFO(this->get_logger(), "📡 Aguardando início da sequência em 2s...");
   }
 
 private:
@@ -26,112 +23,88 @@ private:
     timer_->cancel();
 
     RCLCPP_INFO(this->get_logger(), "\n");
-    RCLCPP_INFO(this->get_logger(), "╔════════════════════════════════════════╗");
-    RCLCPP_INFO(this->get_logger(), "║  🚀 INICIANDO SEQUÊNCIA DE MISSÕES 🚀  ║");
-    RCLCPP_INFO(this->get_logger(), "╚════════════════════════════════════════╝\n");
+    RCLCPP_INFO(this->get_logger(), "╔════════════════════════════════════════════════════╗");
+    RCLCPP_INFO(this->get_logger(), "║        🚀 SEQUÊNCIA COMPLETA COM POUSO           ║");
+    RCLCPP_INFO(this->get_logger(), "╚════════════════════════════════════════════════════╝\n");
 
     // ==========================================
-    // FASE 1: POUSO COMPLETO (SoftLand)
+    // FASE 1: PUBLICAR WAYPOINTS DE POUSO
     // ==========================================
-    RCLCPP_INFO(this->get_logger(), "╔════════════════════════════════════════╗");
-    RCLCPP_INFO(this->get_logger(), "║  📍 FASE 1: POUSO COMPLETO            ║");
-    RCLCPP_INFO(this->get_logger(), "╚═══════════════════���════════════════════╝");
-    RCLCPP_INFO(this->get_logger(), "🛬 Executando: drone_soft_land");
-    RCLCPP_INFO(this->get_logger(), "⬇️ Descendo até o SOLO...\n");
+    RCLCPP_INFO(this->get_logger(), "╔════════════════════════════════════════════════════╗");
+    RCLCPP_INFO(this->get_logger(), "║  📍 FASE 1: PUBLICAR WAYPOINTS DE POUSO          ║");
+    RCLCPP_INFO(this->get_logger(), "╚════════════════════════════════════════════════════╝");
+    RCLCPP_INFO(this->get_logger(), "📡 Executando: drone_publish_landing_waypoints\n");
     
-    // ✅ Executar drone_soft_land de forma BLOQUEANTE (aguarda conclusão)
-    int result = std::system("ros2 run drone_control drone_soft_land");
+    int result0 = std::system("ros2 run drone_control drone_publish_landing_waypoints");
     
-    if (result == 0)
-    {
-      RCLCPP_INFO(this->get_logger(), "✅ Pouso Concluído - Drone no SOLO com Motores Desligados\n");
-    }
-    else
-    {
-      RCLCPP_WARN(this->get_logger(), "⚠️ drone_soft_land pode não ter executado corretamente\n");
+    if (result0 == 0) {
+      RCLCPP_INFO(this->get_logger(), "✅ Waypoints de pouso publicados!\n");
     }
 
+    std::this_thread::sleep_for(1s);
+
     // ==========================================
-    // FASE 2: REPOUSO 10 SEGUNDOS
+    // FASE 2: POUSO COMPLETO
     // ==========================================
-    RCLCPP_INFO(this->get_logger(), "╔════════════════════════════════════════╗");
-    RCLCPP_INFO(this->get_logger(), "║  ⏱️ FASE 2: REPOUSO                    ║");
-    RCLCPP_INFO(this->get_logger(), "╚════════════════════════════════════════╝");
+    RCLCPP_INFO(this->get_logger(), "╔════════════════════════════════════════════════════╗");
+    RCLCPP_INFO(this->get_logger(), "║  📍 FASE 2: POUSO COMPLETO                       ║");
+    RCLCPP_INFO(this->get_logger(), "╚════════════════════════════════════════════════════╝");
+    RCLCPP_INFO(this->get_logger(), "🛬 Executando: drone_soft_land\n");
+    
+    int result1 = std::system("ros2 run drone_control drone_soft_land");
+    
+    if (result1 == 0) {
+      RCLCPP_INFO(this->get_logger(), "✅ Pouso Completo - Drone no SOLO\n");
+    }
+
+    std::this_thread::sleep_for(3s);
+
+    // ==========================================
+    // FASE 3: REPOUSO 10 SEGUNDOS
+    // ==========================================
+    RCLCPP_INFO(this->get_logger(), "╔════════════════════════════════════════════════════╗");
+    RCLCPP_INFO(this->get_logger(), "║  📍 FASE 3: REPOUSO                               ║");
+    RCLCPP_INFO(this->get_logger(), "╚════════════════════════════════════════════════════╝");
     RCLCPP_INFO(this->get_logger(), "😴 Drone descansando no solo...\n");
     
-    for (int i = 10; i > 0; i--)
-    {
+    for (int i = 10; i > 0; i--) {
       RCLCPP_INFO(this->get_logger(), "  ⏳ %d segundos restantes...", i);
-      std::this_thread::sleep_for(std::chrono::seconds(1));
+      std::this_thread::sleep_for(1s);
     }
 
-    RCLCPP_INFO(this->get_logger(), "✅ Tempo de repouso concluído!\n");
+    RCLCPP_INFO(this->get_logger(), "✅ Repouso concluído!\n");
 
     // ==========================================
-    // FASE 3: ATIVAR DRONE
+    // FASE 4: ATIVAR + LEVANTAR (UNIFICADO)
     // ==========================================
-    RCLCPP_INFO(this->get_logger(), "╔════════════════════════════════════════╗");
-    RCLCPP_INFO(this->get_logger(), "║  📍 FASE 3: ATIVAÇÃO DO DRONE         ║");
-    RCLCPP_INFO(this->get_logger(), "╚════════════════════════════════════════╝");
-    RCLCPP_INFO(this->get_logger(), "🔋 Executando: drone_activator");
-    RCLCPP_INFO(this->get_logger(), "🔓 Solicitando OFFBOARD + ARM...\n");
+    RCLCPP_INFO(this->get_logger(), "╔════════════════════════════════════════════════════╗");
+    RCLCPP_INFO(this->get_logger(), "║  📍 FASE 4: ATIVAÇÃO E LEVANTAMENTO              ║");
+    RCLCPP_INFO(this->get_logger(), "╚════════════════════════════════════════════════════╝");
+    RCLCPP_INFO(this->get_logger(), "🔋⬆️ Executando: drone_activate_and_go_forward\n");
+
+    // ✅ NOVO: Nó unificado que faz TUDO (ativar + levantar)
+    int result2 = std::system("ros2 run drone_control drone_activate_and_go_forward");
     
-    int result3 = std::system("ros2 run drone_control drone_activator");
-    
-    if (result3 == 0)
-    {
-      RCLCPP_INFO(this->get_logger(), "✅ Drone Ativado (OFFBOARD + ARMED)\n");
-    }
-    else
-    {
-      RCLCPP_ERROR(this->get_logger(), "❌ Erro ao ativar drone!\n");
-      return;
+    if (result2 == 0) {
+      RCLCPP_INFO(this->get_logger(), "✅ Drone Ativado + Levantado para 2 metros!\n");
     }
 
-    RCLCPP_INFO(this->get_logger(), "⏳ Aguardando 2 segundos antes de levantar...");
-    std::this_thread::sleep_for(2s);
-
-    // ==========================================
-    // FASE 4: LEVANTAR 2 METROS
-    // ==========================================
-    RCLCPP_INFO(this->get_logger(), "\n");
-    RCLCPP_INFO(this->get_logger(), "╔════════════════════════════════════════╗");
-    RCLCPP_INFO(this->get_logger(), "║  📍 FASE 4: LEVANTAMENTO              ║");
-    RCLCPP_INFO(this->get_logger(), "╚════════════════════════════════════════╝");
-    RCLCPP_INFO(this->get_logger(), "⬆️ Executando: drone_go_forward");
-    RCLCPP_INFO(this->get_logger(), "🚁 Levantando até 2 metros...\n");
-
-    int result4 = std::system("ros2 run drone_control drone_go_forward");
-    
-    if (result4 == 0)
-    {
-      RCLCPP_INFO(this->get_logger(), "✅ Drone levantou para 2 metros!\n");
-    }
-    else
-    {
-      RCLCPP_WARN(this->get_logger(), "⚠️ Aviso ao levantar\n");
-    }
-
-    RCLCPP_INFO(this->get_logger(), "⏳ Monitorando voo...");
     std::this_thread::sleep_for(5s);
 
     // ==========================================
     // SEQUÊNCIA CONCLUÍDA
     // ==========================================
     RCLCPP_INFO(this->get_logger(), "\n");
-    RCLCPP_INFO(this->get_logger(), "╔════════════════════════════════════════╗");
-    RCLCPP_INFO(this->get_logger(), "║ ✅ SEQUÊNCIA CONCLUÍDA COM SUCESSO ✅  ║");
-    RCLCPP_INFO(this->get_logger(), "║                                        ║");
-    RCLCPP_INFO(this->get_logger(), "║  1️⃣ ✅ Pouso completo                  ║");
-    RCLCPP_INFO(this->get_logger(), "║  2️⃣ ✅ Repouso 10 segundos             ║");
-    RCLCPP_INFO(this->get_logger(), "║  3️⃣ ✅ Drone ativado                   ║");
-    RCLCPP_INFO(this->get_logger(), "║  4️⃣ ✅ Levantado para 2 metros        ║");
-    RCLCPP_INFO(this->get_logger(), "║                                        ║");
-    RCLCPP_INFO(this->get_logger(), "║  Drone em voo aguardando comandos...   ║");
-    RCLCPP_INFO(this->get_logger(), "║  Pressione Ctrl+C para finalizar       ║");
-    RCLCPP_INFO(this->get_logger(), "╚════════════════════════════════════════╝\n");
-
-    // Continua rodando para monitorar (não finaliza)
+    RCLCPP_INFO(this->get_logger(), "╔════════════════════════════════════════════════════╗");
+    RCLCPP_INFO(this->get_logger(), "║ ✅ SEQUÊNCIA COMPLETA COM SUCESSO ✅             ║");
+    RCLCPP_INFO(this->get_logger(), "║                                                   ║");
+    RCLCPP_INFO(this->get_logger(), "║  1️⃣ ✅ Waypoints de pouso publicados             ║");
+    RCLCPP_INFO(this->get_logger(), "║  2️⃣ ✅ Pouso completo até o solo                 ║");
+    RCLCPP_INFO(this->get_logger(), "║  3️⃣ ✅ Repouso 10 segundos                        ║");
+    RCLCPP_INFO(this->get_logger(), "║  4️⃣ ✅ Ativado + Levantado (UNIFICADO)           ║");
+    RCLCPP_INFO(this->get_logger(), "║                                                   ║");
+    RCLCPP_INFO(this->get_logger(), "║  Drone em voo aguardando comandos                 ║");
+    RCLCPP_INFO(this->get_logger(), "╚════════════════════════════════════════════════════╝\n");
   }
 
   rclcpp::TimerBase::SharedPtr timer_;
