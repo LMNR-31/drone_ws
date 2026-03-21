@@ -186,7 +186,13 @@ private:
         activation_time_ = this->now();
       }
 
-      return; // ✅ SAIR: Não vai para trajetória
+      // ✅ FORÇA ESTADO 1: DECOLAGEM
+      state_voo_ = 1;
+      takeoff_counter_ = 0;
+
+      RCLCPP_INFO(this->get_logger(), "⬆️ Iniciando decolagem para %.1fm...\n", last_waypoint_goal_.pose.position.z);
+
+      return; // ✅ SAIR: Deixa state machine executar ESTADO 1
     }
 
     // ==========================================
