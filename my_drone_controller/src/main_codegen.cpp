@@ -96,6 +96,9 @@ public:
     last_waypoint_goal_.pose.position.x = 0.0;
     last_waypoint_goal_.pose.position.y = 0.0;
     last_waypoint_goal_.pose.position.z = 2.0; // Hover de segurança
+    trajectory_setpoint_[0] = 0.0;
+    trajectory_setpoint_[1] = 0.0;
+    trajectory_setpoint_[2] = 2.0;
 
     RCLCPP_INFO(this->get_logger(), "\n📊 STATUS INICIAL:");
     RCLCPP_INFO(this->get_logger(), "   Estado: %d (ativação)", state_voo_);
@@ -200,6 +203,17 @@ private:
       controlador_ativo_ = false;
       state_voo_ = 4;
       RCLCPP_WARN(this->get_logger(), "🛬 CONTROLADOR DESLIGADO - DEIXANDO drone_soft_land POUSAR\n");
+      return;
+    }
+
+    // ✅ Em ESTADO 3 (trajetória), armazena setpoints relativos em trajectory_setpoint_
+    // para que last_waypoint_goal_ permaneça como posição de hover (offset)
+    if (state_voo_ == 3) {
+      trajectory_setpoint_[0] = x;  // X relativo da trajetória
+      trajectory_setpoint_[1] = y;  // Y relativo da trajetória
+      trajectory_setpoint_[2] = z;  // Z absoluto da trajetória
+      controlador_ativo_ = true;
+      pouso_em_andamento_ = false;
       return;
     }
 
@@ -352,18 +366,24 @@ private:
         return; // ✅ CRUCIAL: NÃO publica mais!
       }
 
-      // ✅ Publica o waypoint recebido
-      pose_msg.pose.position.x = last_waypoint_goal_.pose.position.x;
-      pose_msg.pose.position.y = last_waypoint_goal_.pose.position.y;
-      pose_msg.pose.position.z = last_waypoint_goal_.pose.position.z;
+      // ✅ OFFSET: Trajetória começa da posição de levantamento (hover)
+      double offset_x = last_waypoint_goal_.pose.position.x;
+      double offset_y = last_waypoint_goal_.pose.position.y;
+
+      // ✅ Setpoint relativo (da trajetória) + offset = setpoint absoluto
+      pose_msg.pose.position.x = offset_x + trajectory_setpoint_[0];
+      pose_msg.pose.position.y = offset_y + trajectory_setpoint_[1];
+      pose_msg.pose.position.z = trajectory_setpoint_[2];
       pose_pub_->publish(pose_msg);
 
       if (cycle_count_ % 500 == 0) {
         RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 10000,
-          "📡 Trajetória em execução | X: %.2fm, Y: %.2fm, Z: %.2fm",
-          last_waypoint_goal_.pose.position.x,
-          last_waypoint_goal_.pose.position.y,
-          last_waypoint_goal_.pose.position.z);
+          "📡 Trajetória em execução | X: %.2fm, Y: %.2fm, Z: %.2fm (offset: %.2f, %.2f)",
+          pose_msg.pose.position.x,
+          pose_msg.pose.position.y,
+          pose_msg.pose.position.z,
+          offset_x,
+          offset_y);
       }
     }
 
@@ -429,6 +449,9 @@ private:
   // Rastreamento do último waypoint único recebido (para ignorar duplicatas)
   geometry_msgs::msg::PoseStamped last_waypoint_goal_;
   bool waypoint_goal_received_;      // Recebeu ao menos um waypoint_goal?
+
+  // Setpoints da trajetória (coordenadas relativas ao ponto de hover)
+  double trajectory_setpoint_[3];
 
   // Sincronização thread-safe
   std::mutex mutex_;
