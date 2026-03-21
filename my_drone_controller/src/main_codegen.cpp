@@ -93,6 +93,9 @@ public:
     activation_confirmed_ = false;
     takeoff_counter_ = 0;
     waypoint_goal_received_ = false;
+    last_z_ = 0.0;
+    pouso_start_time_set_ = false;
+    pouso_start_time_ = this->now();
     last_waypoint_goal_.pose.position.x = 0.0;
     last_waypoint_goal_.pose.position.y = 0.0;
     last_waypoint_goal_.pose.position.z = 2.0; // Hover de segurança
@@ -247,6 +250,8 @@ private:
     double x = msg->pose.position.x;
     double y = msg->pose.position.y;
     double z = msg->pose.position.z;
+
+    last_z_ = z;
 
     // ✅ DETECTA POUSO
     if (z < 0.5) {
@@ -457,15 +462,31 @@ private:
           "🛑 CONTROLADOR PAUSADO | drone_soft_land fazendo pouso...");
       }
 
-      // ✅ VERIFICA SE POUSO TERMINOU
-      // Se recebeu novos waypoints com Z > 0.5, solicita DISARM e aguarda confirmação
-      if (!pouso_em_andamento_ && controlador_ativo_ && current_state_.armed) {
-        RCLCPP_WARN(this->get_logger(), "\n✅ POUSO CONCLUÍDO! VOLTANDO A VOAR!");
-        RCLCPP_WARN(this->get_logger(), "⬆️ Iniciando nova decolagem...\n");
+      // ✅ TIMEOUT: Se pousou (Z < 0.5), aguarda 3 segundos para confirmar
+      if (pouso_em_andamento_ && last_z_ < 0.5) {
+        if (!pouso_start_time_set_) {
+          pouso_start_time_ = this->now();
+          pouso_start_time_set_ = true;
+          RCLCPP_INFO(this->get_logger(), "⏱️ Iniciando contagem de pouso (3s para confirmar)...");
+        }
 
-        // ✅ DISARM ANTES DE NOVO CICLO (CRUCIAL!)
-        // Flags serão resetadas em waypoint_goal_callback() quando DISARM for confirmado
-        request_disarm();
+        // ✅ Se passou 3 segundos em Z < 0.5, pouso foi concluído!
+        if ((this->now() - pouso_start_time_).seconds() > 3.0) {
+          RCLCPP_WARN(this->get_logger(), "\n✅ POUSO CONCLUÍDO! VOLTANDO A VOAR!");
+          RCLCPP_WARN(this->get_logger(), "⬆️ Iniciando nova decolagem...\n");
+
+          // ✅ DISARM
+          request_disarm();
+
+          // ✅ RESETAR FLAGS PARA NOVO CICLO
+          offboard_activated_ = false;
+          activation_confirmed_ = false;
+          state_voo_ = 0;
+          takeoff_counter_ = 0;
+          pouso_em_andamento_ = false;
+          pouso_start_time_set_ = false;
+          return;
+        }
       }
 
       return; // NÃO publica nada durante pouso
@@ -503,6 +524,11 @@ private:
   rclcpp::Time activation_time_;     // Timestamp da última solicitação de ativação
   int cycle_count_;                  // Contador de ciclos
   int takeoff_counter_;              // Contador de decolagem
+
+  // Timeout de pouso
+  double last_z_;                    // Última posição Z recebida (para usar em control_loop)
+  rclcpp::Time pouso_start_time_;    // Timestamp quando pouso começou
+  bool pouso_start_time_set_;        // Flag para saber se iniciou contagem
 
   // Rastreamento do último waypoint único recebido (para ignorar duplicatas)
   geometry_msgs::msg::PoseStamped last_waypoint_goal_;
