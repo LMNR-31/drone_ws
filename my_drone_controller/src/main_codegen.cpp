@@ -261,21 +261,16 @@ private:
     // ==========================================
     if (msg->poses.size() >= 2) {
 
-      // ✅ Log simples de debug - não é erro!
       RCLCPP_INFO(this->get_logger(), "🔍 Trajetória (2+ waypoints) recebida");
-      RCLCPP_INFO(this->get_logger(), "   state_voo_=%d (esperado 2 para aceitar)", state_voo_);
+      RCLCPP_INFO(this->get_logger(), "   state_voo_=%d (esperado 2 para ativar)", state_voo_);
 
-      // ✅ Se não está em HOVER (ESTADO 2), ignora silenciosamente
-      if (state_voo_ != 2) {
-        RCLCPP_INFO(this->get_logger(),
-          "⏸️ Trajetória será processada quando drone chegar em HOVER...");
-        return;  // ← Ignora, não rejeita!
-      }
+      // ✅ SEMPRE armazena waypoints (mesmo se ESTADO != 2)
+      trajectory_waypoints_ = msg->poses;
+      current_waypoint_idx_ = 0;
+      trajectory_started_ = false;
+      last_waypoint_goal_.pose = msg->poses[0];
 
-      // ✅ Aqui temos certeza que state_voo_ == 2 (HOVER)
-      RCLCPP_INFO(this->get_logger(), "\n✅ TRAJETÓRIA ACEITA - Drone em HOVER pronto!\n");
-
-      RCLCPP_INFO(this->get_logger(), "✈️ WAYPOINTS DE TRAJETÓRIA: %zu pontos", msg->poses.size());
+      RCLCPP_INFO(this->get_logger(), "✈️ WAYPOINTS DE TRAJETÓRIA armazenados: %zu pontos", msg->poses.size());
       for (size_t i = 0; i < msg->poses.size(); i++) {
         RCLCPP_INFO(this->get_logger(),
           "   WP[%zu]: X=%.2f, Y=%.2f, Z=%.2f",
@@ -286,15 +281,19 @@ private:
       }
       RCLCPP_INFO(this->get_logger(), " ");
 
-      // ✅ NOVO! Armazenar TODOS os waypoints em vetor persistente
-      trajectory_waypoints_ = msg->poses;
-      current_waypoint_idx_ = 0;
-      trajectory_started_ = false;
+      // ✅ Se NÃO em HOVER (ESTADO 2), apenas armazena e aguarda
+      if (state_voo_ != 2) {
+        RCLCPP_INFO(this->get_logger(),
+          "⏸️ Trajetória armazenada - Será ativada quando drone chegar em HOVER (ESTADO 2)");
+        controlador_ativo_ = false;  // ← Ainda NÃO ativa!
+        pouso_em_andamento_ = false;
+        return;  // ← Retorna mas WAYPOINTS estão armazenados!
+      }
 
-      last_waypoint_goal_.pose = msg->poses[0];
+      // ✅ Se EM HOVER (ESTADO 2), ativa trajetória IMEDIATAMENTE
+      RCLCPP_INFO(this->get_logger(), "\n✅ TRAJETÓRIA ACEITA E ATIVADA! Drone em HOVER pronto!\n");
 
-      // ✅ Processa trajetória e ativa controlador
-      controlador_ativo_ = true;
+      controlador_ativo_ = true;   // ← Ativa agora!
       pouso_em_andamento_ = false;
       state_voo_ = 3; // ✅ ESTADO 3: TRAJETÓRIA
 
