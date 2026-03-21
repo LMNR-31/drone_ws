@@ -258,6 +258,20 @@ private:
       return;
     }
 
+    // ✅ DETECTA DISARM em ESTADO 4
+    // Quando drone é desarmado após pouso, reseta flags para novo ciclo
+    if (state_voo_ == 4 && !current_state_.armed) {
+      RCLCPP_INFO(this->get_logger(), "✅ DRONE DESARMADO! Pronto para novo ciclo");
+
+      // ✅ RESETAR FLAGS PARA NOVO CICLO
+      offboard_activated_ = false;
+      activation_confirmed_ = false;
+      state_voo_ = 0;
+      takeoff_counter_ = 0;
+      pouso_em_andamento_ = false;
+      return;
+    }
+
     // ✅ Em ESTADO 3 (trajetória), armazena setpoints relativos em trajectory_setpoint_
     // para que last_waypoint_goal_ permaneça como posição de hover (offset)
     if (state_voo_ == 3) {
@@ -444,20 +458,14 @@ private:
       }
 
       // ✅ VERIFICA SE POUSO TERMINOU
-      // Se recebeu novos waypoints com Z > 0.5, volta a voar!
-      if (!pouso_em_andamento_ && controlador_ativo_) {
+      // Se recebeu novos waypoints com Z > 0.5, solicita DISARM e aguarda confirmação
+      if (!pouso_em_andamento_ && controlador_ativo_ && current_state_.armed) {
         RCLCPP_WARN(this->get_logger(), "\n✅ POUSO CONCLUÍDO! VOLTANDO A VOAR!");
         RCLCPP_WARN(this->get_logger(), "⬆️ Iniciando nova decolagem...\n");
 
         // ✅ DISARM ANTES DE NOVO CICLO (CRUCIAL!)
+        // Flags serão resetadas em waypoint_goal_callback() quando DISARM for confirmado
         request_disarm();
-
-        // ✅ RESETAR FLAGS PARA NOVO CICLO
-        offboard_activated_ = false;
-        activation_confirmed_ = false;
-        state_voo_ = 0;  // Volta para ativação
-        takeoff_counter_ = 0;
-        return;
       }
 
       return; // NÃO publica nada durante pouso
