@@ -223,7 +223,7 @@ private:
     msg.header.frame_id = "map";
     msg.header.stamp = this->now();
 
-    // ✅ WAYPOINT 1: Posição ATUAL do drone (onde vai levantar)
+    // ✅ WAYPOINT 1: Levanta na posição atual
     auto pose1 = geometry_msgs::msg::Pose();
     pose1.position.x = current_x_;
     pose1.position.y = current_y_;
@@ -231,21 +231,11 @@ private:
     pose1.orientation.w = 1.0;
     msg.poses.push_back(pose1);
 
-    // ✅ WAYPOINT 2: Avança 2m a partir da posição atual
-    auto pose2 = geometry_msgs::msg::Pose();
-    pose2.position.x = current_x_ + 2.0;
-    pose2.position.y = current_y_;
-    pose2.position.z = 2.0;
-    pose2.orientation.w = 1.0;
-    msg.poses.push_back(pose2);
-
     waypoints_pub_->publish(msg);
 
-    RCLCPP_INFO(this->get_logger(), "📡 WAYPOINTS DE LEVANTAMENTO PUBLICADOS:");
+    RCLCPP_INFO(this->get_logger(), "📡 WAYPOINT DE LEVANTAMENTO PUBLICADO:");
     RCLCPP_INFO(this->get_logger(), "   WP1: X=%.2f, Y=%.2f, Z=2.0 (levanta no ponto atual)",
       current_x_, current_y_);
-    RCLCPP_INFO(this->get_logger(), "   WP2: X=%.2f, Y=%.2f, Z=2.0 (avança a partir do ponto atual)",
-      current_x_ + 2.0, current_y_);
   }
 
   // ==========================================
