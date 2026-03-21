@@ -1,6 +1,5 @@
 #include "rclcpp/rclcpp.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
-#include "geometry_msgs/msg/pose_array.hpp"
 #include "mavros_msgs/srv/set_mode.hpp"
 #include "mavros_msgs/srv/command_bool.hpp"
 #include "mavros_msgs/msg/state.hpp" 
@@ -37,12 +36,12 @@ public:
         current_state_ = *msg;
       });
 
-    waypoints_sub_ = this->create_subscription<geometry_msgs::msg::PoseArray>(
-      "/waypoints", 1,
-      std::bind(&DroneControllerCompleto::waypoints_callback, this, std::placeholders::_1)
+    waypoint_goal_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
+      "/waypoint_goal", 1,
+      std::bind(&DroneControllerCompleto::waypoint_goal_callback, this, std::placeholders::_1)
     );
 
-    RCLCPP_INFO(this->get_logger(), "✓ Subscribers criados: /uav1/mavros/state e /waypoints");
+    RCLCPP_INFO(this->get_logger(), "✓ Subscribers criados: /uav1/mavros/state e /waypoint_goal");
 
     // ==========================================
     // SERVICE CLIENTS - ATIVAÇÃO
@@ -87,6 +86,12 @@ public:
     arm_requested_ = false;
     takeoff_counter_ = 0;
 
+    // Inicializa o ponto alvo com posição segura (hover)
+    target_pose_.position.x = 0.0;
+    target_pose_.position.y = 0.0;
+    target_pose_.position.z = 2.0;
+    target_pose_.orientation.w = 1.0;
+
     RCLCPP_INFO(this->get_logger(), "\n📊 STATUS INICIAL:");
     RCLCPP_INFO(this->get_logger(), "   Estado: %d (ativação)", state_voo_);
     RCLCPP_INFO(this->get_logger(), "   Controlador: %s", controlador_ativo_ ? "ATIVO" : "INATIVO");
@@ -126,20 +131,15 @@ private:
   }
 
   // ==========================================
-  // CALLBACK: RECEBE WAYPOINTS
+  // CALLBACK: RECEBE WAYPOINT GOAL
   // ==========================================
-  void waypoints_callback(const geometry_msgs::msg::PoseArray::SharedPtr msg) {
+  void waypoint_goal_callback(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    if (msg->poses.size() < 2) {
-      RCLCPP_WARN(this->get_logger(), "❌ Waypoints insuficientes: %zu", msg->poses.size());
-      return;
-    }
-
     // ✅ DETECTA POUSO
-    double last_z = msg->poses.back().position.z;
-    if (last_z < 0.5) {
-      RCLCPP_WARN(this->get_logger(), "\n🛬🛬🛬 POUSO DETECTADO! Z_final = %.2f m", last_z);
+    double goal_z = msg->pose.position.z;
+    if (goal_z < 0.5) {
+      RCLCPP_WARN(this->get_logger(), "\n🛬🛬🛬 POUSO DETECTADO! Z_goal = %.2f m", goal_z);
       pouso_em_andamento_ = true;
       controlador_ativo_ = false;
       state_voo_ = 4; // ✅ VAI DIRETO PARA ESTADO 4!
@@ -147,17 +147,12 @@ private:
       return;
     }
 
-    // ✅ TRAJETÓRIA NORMAL
-    RCLCPP_INFO(this->get_logger(), "\n📍 WAYPOINTS RECEBIDOS: %zu pontos", msg->poses.size());
-    for (size_t i = 0; i < msg->poses.size(); i++) {
-      RCLCPP_INFO(this->get_logger(), 
-        "   WP[%zu]: X=%.2f, Y=%.2f, Z=%.2f", 
-        i, 
-        msg->poses[i].position.x,
-        msg->poses[i].position.y,
-        msg->poses[i].position.z);
-    }
-    RCLCPP_INFO(this->get_logger(), " ");
+    // ✅ PONTO ÚNICO RECEBIDO
+    target_pose_ = msg->pose;
+    RCLCPP_INFO(this->get_logger(), "\n📍 WAYPOINT GOAL RECEBIDO: X=%.2f, Y=%.2f, Z=%.2f",
+      target_pose_.position.x,
+      target_pose_.position.y,
+      target_pose_.position.z);
 
     controlador_ativo_ = true;
     pouso_em_andamento_ = false;
@@ -261,14 +256,14 @@ private:
 
       if (cycle_count_ % 500 == 0) {
         RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 10000,
-          "🛸 Em HOVER (2.0m) | Aguardando waypoints... Controlador: %s",
+          "🛸 Em HOVER (2.0m) | Aguardando waypoint goal... Controlador: %s",
           controlador_ativo_ ? "ATIVO" : "INATIVO");
       }
 
       // ✅ Quando recebe waypoints válidos, vai para estado 3
       if (controlador_ativo_) {
         state_voo_ = 3;
-        RCLCPP_INFO(this->get_logger(), "✈️ Iniciando execução de trajetória...\n");
+        RCLCPP_INFO(this->get_logger(), "✈️ Iniciando navegação para o ponto alvo...\n");
       }
 
       // ✅ SE DETECTAR POUSO NESTE ESTADO
@@ -291,15 +286,14 @@ private:
         return; // ✅ CRUCIAL: NÃO publica mais!
       }
 
-      // Mantém drone em posição fixa (aguardando waypoints)
-      pose_msg.pose.position.x = 0.0;
-      pose_msg.pose.position.y = 0.0;
-      pose_msg.pose.position.z = 2.0;
+      // Navega para o ponto alvo recebido
+      pose_msg.pose = target_pose_;
       pose_pub_->publish(pose_msg);
 
       if (cycle_count_ % 500 == 0) {
         RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 10000,
-          "📡 Trajetória em execução | Z: 2.0m (aguardando comando)");
+          "📡 Navegando para alvo | X=%.2f Y=%.2f Z=%.2f",
+          target_pose_.position.x, target_pose_.position.y, target_pose_.position.z);
       }
     }
 
@@ -335,7 +329,7 @@ private:
 
   // Subscribers
   rclcpp::Subscription<mavros_msgs::msg::State>::SharedPtr state_sub_;
-  rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr waypoints_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr waypoint_goal_sub_;
 
   // Service Clients - ATIVAÇÃO OFFBOARD + ARM
   rclcpp::Client<mavros_msgs::srv::SetMode>::SharedPtr mode_client_;
@@ -355,6 +349,9 @@ private:
   bool arm_requested_;               // ARM foi solicitado?
   int cycle_count_;                  // Contador de ciclos
   int takeoff_counter_;              // Contador de decolagem
+
+  // Ponto alvo recebido
+  geometry_msgs::msg::Pose target_pose_;
 
   // Sincronização thread-safe
   std::mutex mutex_;
