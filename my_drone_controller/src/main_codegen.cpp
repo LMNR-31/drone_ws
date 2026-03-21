@@ -171,10 +171,11 @@ private:
   // ==========================================
   void odometry_callback(const nav_msgs::msg::Odometry::SharedPtr msg) {
     std::lock_guard<std::mutex> lock(mutex_);
-    // CORRIGIR: /uav1/mavros/local_position/odom usa NED (North-East-Down)
-    // Em NED, Z negativo = altura (subindo 2m => Z = -2.0)
-    // Invertemos para que current_z_real_ seja positivo (altura)
-    current_z_real_ = -msg->pose.pose.position.z;
+    // ✅ CORRIGIR: /uav1/mavros/local_position/odom usa NED (North-East-Down)
+    // Z negativo em NED = altura (Z=-2.0 significa 2 metros de altura)
+    // Usamos MÓDULO (valor absoluto) para ter altura sempre positiva
+    // |Z| = altura em metros (0 no solo, 2.0 em hover)
+    current_z_real_ = std::abs(msg->pose.pose.position.z);
   }
 
   // ==========================================
