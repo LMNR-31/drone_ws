@@ -68,34 +68,41 @@ private:
     msg.header.frame_id = "map";
     msg.header.stamp = this->now();
 
-    // ✅ WP1: Posição ATUAL do drone (X, Y, Z atuais)
-    auto pose1 = geometry_msgs::msg::Pose();
-    pose1.position.x = current_pose_.pose.position.x;
-    pose1.position.y = current_pose_.pose.position.y;
-    pose1.position.z = current_pose_.pose.position.z;
-    pose1.orientation.w = 1.0;
-    msg.poses.push_back(pose1);
+    double current_z = current_pose_.pose.position.z;
+    double landing_z = 0.05;
+    double delta_z = current_z - landing_z;
 
-    // ✅ WP2: Pouso no MESMO X, Y mas Z=0.05 (solo)
-    auto pose2 = geometry_msgs::msg::Pose();
-    pose2.position.x = current_pose_.pose.position.x;
-    pose2.position.y = current_pose_.pose.position.y;
-    pose2.position.z = 0.05;
-    pose2.orientation.w = 1.0;
-    msg.poses.push_back(pose2);
+    // ✅ Descida em 5 waypoints (0%, 25%, 50%, 75%, 100%)
+    for (int i = 0; i <= 4; i++) {
+      auto pose = geometry_msgs::msg::Pose();
+      pose.position.x = current_pose_.pose.position.x;
+      pose.position.y = current_pose_.pose.position.y;
+
+      // Descida linear: começa em current_z, termina em 0.05
+      double progress = static_cast<double>(i) / 4.0;  // 0.0 → 1.0
+      pose.position.z = current_z - (delta_z * progress);
+
+      pose.orientation.w = 1.0;
+      msg.poses.push_back(pose);
+    }
 
     waypoints_pub_->publish(msg);
 
-    RCLCPP_INFO(this->get_logger(), "📍 WAYPOINTS DE POUSO PUBLICADOS:");
+    RCLCPP_INFO(this->get_logger(), "📍 WAYPOINTS DE POUSO COM DESCIDA PUBLICADOS:");
     RCLCPP_INFO(this->get_logger(),
-      "   WP1: X=%.2f, Y=%.2f, Z=%.2f (posição atual)",
-      current_pose_.pose.position.x,
-      current_pose_.pose.position.y,
-      current_pose_.pose.position.z);
-    RCLCPP_INFO(this->get_logger(),
-      "   WP2: X=%.2f, Y=%.2f, Z=0.05 (POUSO NO PONTO!)",
+      "   Posição XY: (%.2f, %.2f)",
       current_pose_.pose.position.x,
       current_pose_.pose.position.y);
+    RCLCPP_INFO(this->get_logger(),
+      "   Descida: %.2f m → 0.05 m (5 waypoints)",
+      current_z);
+
+    for (size_t i = 0; i < msg.poses.size(); i++) {
+      RCLCPP_INFO(this->get_logger(),
+        "   WP[%zu]: Z=%.2f",
+        i,
+        msg.poses[i].position.z);
+    }
   }
 
   rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr waypoints_pub_;
