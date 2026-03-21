@@ -216,8 +216,22 @@ private:
       pouso_em_andamento_ = false;  // ✅ Drone NÃO está mais pousando
       controlador_ativo_ = false;   // ✅ Reseta controlador para novo ciclo
 
+      // ✅ Log de debug ANTES da verificação
+      RCLCPP_INFO(this->get_logger(), "🔍 DEBUG FLAGS ANTES:");
+      RCLCPP_INFO(this->get_logger(), "   offboard_activated_=%d", offboard_activated_);
+      RCLCPP_INFO(this->get_logger(), "   state_voo_=%d", state_voo_);
+      RCLCPP_INFO(this->get_logger(), "   activation_confirmed_=%d", activation_confirmed_);
+
       if (!offboard_activated_) {
         RCLCPP_INFO(this->get_logger(), "🔋 Ativando OFFBOARD+ARM para levantamento...\n");
+        request_offboard();
+        request_arm();
+        offboard_activated_ = true;
+        activation_time_ = this->now();
+      } else {
+        RCLCPP_WARN(this->get_logger(), "⚠️ AVISO: offboard_activated_ já está TRUE!");
+        RCLCPP_WARN(this->get_logger(), "   Forçando reset e reativação...");
+        offboard_activated_ = false;
         request_offboard();
         request_arm();
         offboard_activated_ = true;
@@ -227,6 +241,11 @@ private:
       // ✅ Vai direto para ESTADO 1 (decolagem) aguardando OFFBOARD+ARM confirmados
       state_voo_ = 1;
       takeoff_counter_ = 0;
+
+      // ✅ Log de debug DEPOIS da verificação
+      RCLCPP_INFO(this->get_logger(), "🔍 DEBUG FLAGS DEPOIS:");
+      RCLCPP_INFO(this->get_logger(), "   offboard_activated_=%d", offboard_activated_);
+      RCLCPP_INFO(this->get_logger(), "   state_voo_=%d\n", state_voo_);
 
       return;
     }
@@ -357,6 +376,15 @@ private:
     // ESTADO 1: DECOLAGEM
     // ==========================================
     else if (state_voo_ == 1) {
+
+      // ✅ VERIFICAÇÃO DE SEGURANÇA: Se chegou em ESTADO 1 mas OFFBOARD não foi ativado, ativar!
+      if (!offboard_activated_) {
+        RCLCPP_WARN(this->get_logger(), "⚠️ ESTADO 1 SEM OFFBOARD ATIVADO! Forçando ativação...");
+        request_offboard();
+        request_arm();
+        offboard_activated_ = true;
+        activation_time_ = this->now();
+      }
 
       // ✅ Sempre publica setpoints
       pose_msg.pose.position.x = last_waypoint_goal_.pose.position.x;
@@ -512,6 +540,7 @@ private:
             "\n✅ POUSO CONCLUÍDO! Aguardando novo comando de waypoint para decolar novamente...\n");
 
           // ✅ Resetar TODAS as flags para estado limpo
+          // ✅ CRUCIAL: offboard_activated_ DEVE ser false para próxima decolagem!
           state_voo_ = 0;
           pouso_em_andamento_ = false;
           controlador_ativo_ = false;
@@ -522,6 +551,12 @@ private:
           takeoff_counter_ = 0;
           trajectory_waypoints_.clear();
           current_waypoint_idx_ = 0;
+
+          // ✅ Log de verificação
+          RCLCPP_WARN(this->get_logger(), "🔍 DEBUG RESET EM ESTADO 4:");
+          RCLCPP_WARN(this->get_logger(), "   offboard_activated_=%d (deve ser 0)", offboard_activated_);
+          RCLCPP_WARN(this->get_logger(), "   state_voo_=%d (deve ser 0)", state_voo_);
+
           return;
         }
       }
