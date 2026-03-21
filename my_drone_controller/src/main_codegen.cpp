@@ -175,7 +175,8 @@ private:
         msg->poses[0].position.z);
 
       last_waypoint_goal_.pose = msg->poses[0];
-      pouso_em_andamento_ = false;
+      pouso_em_andamento_ = false;  // ✅ Drone NÃO está mais pousando
+      controlador_ativo_ = false;   // ✅ Reseta controlador para novo ciclo
 
       // ✅ Ativa OFFBOARD+ARM (uma única vez ao receber waypoint de levantamento)
       if (!offboard_activated_) {
