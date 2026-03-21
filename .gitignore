@@ -1,6 +1,3 @@
-# Ignorar pasta .vscode inteira (configurações locais do VS Code)
-.vscode/
-
 # Ignorar builds e logs do ROS2
 build/
 install/
