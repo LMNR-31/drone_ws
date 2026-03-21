@@ -2,6 +2,7 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/pose_array.hpp>
 #include <geometry_msgs/msg/pose.hpp>
+#include <nav_msgs/msg/odometry.hpp>
 #include <mavros_msgs/msg/state.hpp>
 #include <mavros_msgs/srv/set_mode.hpp>
 #include <mavros_msgs/srv/command_bool.hpp>
@@ -39,6 +40,10 @@ public:
       "/uav1/mavros/state", 10,
       std::bind(&DroneActivateAndGoForward::stateCallback, this, _1));
 
+    odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
+      "/uav1/mavros/local_position/odom", 10,
+      std::bind(&DroneActivateAndGoForward::odomCallback, this, std::placeholders::_1));
+
     RCLCPP_INFO(this->get_logger(), "✓ Subscriber criado");
 
     // ==========================================
@@ -59,7 +64,7 @@ public:
     // ==========================================
     // INICIALIZAÇÃO
     // ==========================================
-    setpoint_.pose.position.z = 0.0;
+    setpoint_.pose.position.z = 2.0;
     setpoint_.pose.orientation.w = 1.0;
 
     state_ = StateMachine::WAIT_FCU;
@@ -86,8 +91,22 @@ private:
     current_state_ = *msg;
   }
 
+  void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
+  {
+    current_x_ = msg->pose.pose.position.x;
+    current_y_ = msg->pose.pose.position.y;
+    current_z_ = msg->pose.pose.position.z;
+    odom_received_ = true;
+
+    if (cycle_count_ % 50 == 0) {
+      RCLCPP_DEBUG(this->get_logger(), "📍 Posição atual: X=%.2f, Y=%.2f, Z=%.2f",
+        current_x_, current_y_, current_z_);
+    }
+  }
+
   void timerCallback()
   {
+    cycle_count_++;
     setpoint_.header.stamp = this->now();
     setpoint_.header.frame_id = "map";
 
@@ -108,7 +127,16 @@ private:
     case StateMachine::STREAM_SETPOINT:
       if ((this->now() - state_time_) > rclcpp::Duration(3s))
       {
+        if (!odom_received_) {
+          if (cycle_count_ % 20 == 0) {
+            RCLCPP_WARN(this->get_logger(), "⏳ Aguardando posição do drone...");
+          }
+          return;
+        }
+
         RCLCPP_INFO(this->get_logger(), "✓ Setpoints transmitidos. Solicitando OFFBOARD...");
+        RCLCPP_INFO(this->get_logger(), "📍 Posição detectada: X=%.2f, Y=%.2f, Z=%.2f",
+          current_x_, current_y_, current_z_);
         state_ = StateMachine::REQUEST_OFFBOARD;
       }
       break;
@@ -195,27 +223,29 @@ private:
     msg.header.frame_id = "map";
     msg.header.stamp = this->now();
 
-    // ✅ WAYPOINT 1: Posição inicial (ou 2m) - PONTO DE PARTIDA
+    // ✅ WAYPOINT 1: Posição ATUAL do drone (onde vai levantar)
     auto pose1 = geometry_msgs::msg::Pose();
-    pose1.position.x = 0.0;
-    pose1.position.y = 0.0;
-    pose1.position.z = 2.0; // Começa de 2m (já está aí)
+    pose1.position.x = current_x_;
+    pose1.position.y = current_y_;
+    pose1.position.z = 2.0;
     pose1.orientation.w = 1.0;
     msg.poses.push_back(pose1);
 
-    // ✅ WAYPOINT 2: Posição frente a 2m - PONTO DE CHEGADA
+    // ✅ WAYPOINT 2: Avança 2m a partir da posição atual
     auto pose2 = geometry_msgs::msg::Pose();
-    pose2.position.x = 2.0; // Avança 2m para frente (X)
-    pose2.position.y = 0.0;
-    pose2.position.z = 2.0; // Mantém altura de 2m
+    pose2.position.x = current_x_ + 2.0;
+    pose2.position.y = current_y_;
+    pose2.position.z = 2.0;
     pose2.orientation.w = 1.0;
     msg.poses.push_back(pose2);
 
     waypoints_pub_->publish(msg);
 
     RCLCPP_INFO(this->get_logger(), "📡 WAYPOINTS DE LEVANTAMENTO PUBLICADOS:");
-    RCLCPP_INFO(this->get_logger(), "   WP1: X=0.0, Y=0.0, Z=2.0 (ponto de partida)");
-    RCLCPP_INFO(this->get_logger(), "   WP2: X=1.0, Y=0.0, Z=2.0 (avanço frontal)");
+    RCLCPP_INFO(this->get_logger(), "   WP1: X=%.2f, Y=%.2f, Z=2.0 (levanta no ponto atual)",
+      current_x_, current_y_);
+    RCLCPP_INFO(this->get_logger(), "   WP2: X=%.2f, Y=%.2f, Z=2.0 (avança a partir do ponto atual)",
+      current_x_ + 2.0, current_y_);
   }
 
   // ==========================================
@@ -228,6 +258,7 @@ private:
   // SUBSCRIBERS
   // ==========================================
   rclcpp::Subscription<mavros_msgs::msg::State>::SharedPtr state_sub_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
 
   // ==========================================
   // SERVICE CLIENTS
@@ -250,6 +281,15 @@ private:
   rclcpp::Time state_time_;
   rclcpp::Time activated_time_;
   rclcpp::Time publish_time_;
+
+  // Posição atual do drone
+  double current_x_{0.0};
+  double current_y_{0.0};
+  double current_z_{0.0};
+  bool odom_received_{false};
+
+  // Contador de ciclos para debug
+  int cycle_count_{0};
 };
 
 int main(int argc, char **argv)
