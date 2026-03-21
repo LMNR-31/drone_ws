@@ -43,10 +43,10 @@ windows:
   #     layout: tiled
   #     panes:
   #       - waitForGazebo; sleep 8; source ~/ros2_ws/install/setup.bash; ros2 run drone_custom_control drone_command_filter
-  - activation:
-      layout: tiled
-      panes:
-        - waitForGazebo; sleep 10; source ~/ros2_ws/install/setup.bash && ros2 run drone_control drone_activator
+  # - activation:
+  #     layout: tiled
+  #     panes:
+  #       - waitForGazebo; sleep 10; source ~/ros2_ws/install/setup.bash && ros2 run drone_control drone_activator
 
   - status:
       layout: tiled
@@ -69,12 +69,23 @@ windows:
   #     panes:
   #       - waitForCore; sleep 2; ~/.i3/layout_manager.sh ./layout.json
 
-  - vou:
+  - drone_controller:
       layout: tiled
       panes:
         - |
           waitForGazebo; sleep 5;
-          waitForPX4; 
-          ros2 run drone_control drone_go_forward
+          waitForPX4; sleep 2;
+          source ~/ros2_ws/install/setup.bash && \
+          ros2 run my_drone_controller drone_node --ros-args \
+            -p hover_enabled:=true \
+            -p hover_time_seconds:=3.0
+
+  # # - vou:
+  # #     layout: tiled
+  # #     panes:
+  # #       - |
+  # #         waitForGazebo; sleep 5;
+  # #         waitForPX4; 
+  # #         ros2 run drone_control drone_go_forward
   - terminal1:
   - terminal2:
