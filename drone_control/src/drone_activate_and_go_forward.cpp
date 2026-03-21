@@ -178,12 +178,13 @@ private:
     case StateMachine::PUBLISH_WAYPOINTS:
       if ((this->now() - publish_time_) > rclcpp::Duration(2s))
       {
-        RCLCPP_INFO(this->get_logger(), "✅ Waypoints de levantamento enviados.\n");
-        state_ = StateMachine::ACTIVATED;
+        RCLCPP_INFO(this->get_logger(), "✅ Waypoints de levantamento enviados. Finalizando nó.\n");
+        state_ = StateMachine::FINISH;
       }
       break;
 
     case StateMachine::FINISH:
+      rclcpp::shutdown();
       break;
     }
   }
