@@ -139,6 +139,21 @@ private:
   }
 
   // ==========================================
+  // SOLICITA DISARM (DESARMAR DRONE)
+  // ==========================================
+  void request_disarm() {
+    if (!arm_client_->service_is_ready()) {
+      return;
+    }
+
+    auto request = std::make_shared<mavros_msgs::srv::CommandBool::Request>();
+    request->value = false; // false = desarmar
+
+    arm_client_->async_send_request(request);
+    RCLCPP_INFO(this->get_logger(), "🔴 Solicitando DISARM...");
+  }
+
+  // ==========================================
   // CALLBACK: RECEBE WAYPOINTS
   // ==========================================
   void waypoints_callback(const geometry_msgs::msg::PoseArray::SharedPtr msg) {
@@ -433,6 +448,9 @@ private:
       if (!pouso_em_andamento_ && controlador_ativo_) {
         RCLCPP_WARN(this->get_logger(), "\n✅ POUSO CONCLUÍDO! VOLTANDO A VOAR!");
         RCLCPP_WARN(this->get_logger(), "⬆️ Iniciando nova decolagem...\n");
+
+        // ✅ DISARM ANTES DE NOVO CICLO (CRUCIAL!)
+        request_disarm();
 
         // ✅ RESETAR FLAGS PARA NOVO CICLO
         offboard_activated_ = false;
