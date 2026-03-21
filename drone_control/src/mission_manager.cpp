@@ -75,36 +75,28 @@ private:
     RCLCPP_INFO(this->get_logger(), "✅ Repouso concluído!\n");
 
     // ==========================================
-    // FASE 4: ATIVAR + LEVANTAR (UNIFICADO)
-    // ==========================================
-    RCLCPP_INFO(this->get_logger(), "╔════════════════════════════════════════════════════╗");
-    RCLCPP_INFO(this->get_logger(), "║  📍 FASE 4: ATIVAÇÃO E LEVANTAMENTO              ║");
-    RCLCPP_INFO(this->get_logger(), "╚════════════════════════════════════════════════════╝");
-    RCLCPP_INFO(this->get_logger(), "🔋⬆️ Executando: drone_activate_and_go_forward\n");
-
-    // ✅ Executar em BACKGROUND para não bloquear
-    std::system("ros2 run drone_control drone_activate_and_go_forward &");
-
-    RCLCPP_INFO(this->get_logger(), "✅ drone_activate_and_go_forward iniciado em BACKGROUND!\n");
-    RCLCPP_INFO(this->get_logger(), "✅ Mission Manager finalizando - Drone continua ativo!\n");
-
-    // ✅ Aguardar brevemente apenas para garantir que o nó iniciou
-    std::this_thread::sleep_for(2s);
-
-    // ==========================================
     // SEQUÊNCIA CONCLUÍDA
     // ==========================================
     RCLCPP_INFO(this->get_logger(), "\n");
     RCLCPP_INFO(this->get_logger(), "╔════════════════════════════════════════════════════╗");
     RCLCPP_INFO(this->get_logger(), "║ ✅ SEQUÊNCIA COMPLETA COM SUCESSO ✅             ║");
-    RCLCPP_INFO(this->get_logger(), "║                                                   ║");
-    RCLCPP_INFO(this->get_logger(), "║  1️⃣ ✅ Waypoints de pouso publicados             ║");
-    RCLCPP_INFO(this->get_logger(), "║  2️⃣ ✅ Pouso completo até o solo                 ║");
-    RCLCPP_INFO(this->get_logger(), "║  3️⃣ ✅ Repouso 10 segundos                        ║");
-    RCLCPP_INFO(this->get_logger(), "║  4️⃣ ✅ Ativado + Levantado (UNIFICADO)           ║");
-    RCLCPP_INFO(this->get_logger(), "║                                                   ║");
-    RCLCPP_INFO(this->get_logger(), "║  Drone em voo aguardando comandos                 ║");
+    RCLCPP_INFO(this->get_logger(), "╚════════════════════════════════════════════════════╝");
+    RCLCPP_INFO(this->get_logger(), "");
+    RCLCPP_INFO(this->get_logger(), "📋 Fases executadas:");
+    RCLCPP_INFO(this->get_logger(), "   1️⃣ ✅ Waypoints de pouso publicados");
+    RCLCPP_INFO(this->get_logger(), "   2️⃣ ✅ Pouso completo até o solo");
+    RCLCPP_INFO(this->get_logger(), "   3️⃣ ✅ Repouso 10 segundos");
+    RCLCPP_INFO(this->get_logger(), "");
+    RCLCPP_INFO(this->get_logger(), "🚁 Status do drone:");
+    RCLCPP_INFO(this->get_logger(), "   ✅ main_codegen controla ativação OFFBOARD+ARM");
+    RCLCPP_INFO(this->get_logger(), "   ✅ Drone pronto para novo ciclo de levantamento");
+    RCLCPP_INFO(this->get_logger(), "");
+    RCLCPP_INFO(this->get_logger(), "📍 main_codegen continua em background");
+    RCLCPP_INFO(this->get_logger(), "🛑 Mission Manager encerrando...");
     RCLCPP_INFO(this->get_logger(), "╚════════════════════════════════════════════════════╝\n");
+
+    // ✅ ENCERRA O NÓ
+    rclcpp::shutdown();
   }
 
   rclcpp::TimerBase::SharedPtr timer_;
