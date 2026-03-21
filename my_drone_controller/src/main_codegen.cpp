@@ -462,15 +462,15 @@ private:
           "🛑 CONTROLADOR PAUSADO | drone_soft_land fazendo pouso...");
       }
 
-      // ✅ TIMEOUT: Se pousou (Z < 0.5), aguarda 3 segundos para confirmar
-      if (pouso_em_andamento_ && last_z_ < 0.5) {
+      // ✅ TIMEOUT: Uma vez que pouso foi detectado, aguarda 3 segundos INDEPENDENTE de last_z_
+      if (pouso_em_andamento_) {
         if (!pouso_start_time_set_) {
           pouso_start_time_ = this->now();
           pouso_start_time_set_ = true;
           RCLCPP_INFO(this->get_logger(), "⏱️ Iniciando contagem de pouso (3s para confirmar)...");
         }
 
-        // ✅ Se passou 3 segundos em Z < 0.5, pouso foi concluído!
+        // ✅ Se passou 3 segundos desde que pouso foi detectado, pouso foi concluído!
         if ((this->now() - pouso_start_time_).seconds() > 3.0) {
           RCLCPP_WARN(this->get_logger(), "\n✅ POUSO CONCLUÍDO! VOLTANDO A VOAR!");
           RCLCPP_WARN(this->get_logger(), "⬆️ Iniciando nova decolagem...\n");
