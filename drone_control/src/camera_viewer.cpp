@@ -134,6 +134,24 @@ private:
             idx++;
         }
 
+        // Separator lines between cameras
+        cv::Scalar line_color = cv::Scalar(200, 200, 200);  // Light gray
+        int line_thickness = 2;
+
+        // Vertical lines (between columns)
+        for (int col = 1; col < cols; col++) {
+            int x = col * img_width;
+            cv::line(canvas, cv::Point(x, 0), cv::Point(x, window_height_),
+                     line_color, line_thickness);
+        }
+
+        // Horizontal lines (between rows)
+        for (int row = 1; row < rows; row++) {
+            int y = row * img_height;
+            cv::line(canvas, cv::Point(0, y), cv::Point(window_width_, y),
+                     line_color, line_thickness);
+        }
+
         return canvas;
     }
 };
