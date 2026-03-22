@@ -173,7 +173,7 @@ private:
       }
 
       // ✅ Detecta quando chegou no solo (usando odometria real)
-      if (z_ < 0.15)
+      if (z_ < 0.1)
       {
         landed_ = true;
         landed_time_ = this->now();

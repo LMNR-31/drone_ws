@@ -193,9 +193,9 @@ private:
     double last_z = msg->poses.back().position.z;
 
     // ==========================================
-    // DETECTA POUSO (Z < 0.5)
+    // DETECTA POUSO (Z < 0.1)
     // ==========================================
-    if (msg->poses.size() == 1 && last_z < 0.5) {
+    if (msg->poses.size() == 1 && last_z < 0.1) {
       RCLCPP_WARN(this->get_logger(), "\n🛬🛬🛬 POUSO DETECTADO! Z_final = %.2f m", last_z);
       pouso_em_andamento_ = true;
       controlador_ativo_ = false;
@@ -318,8 +318,7 @@ private:
     last_z_ = z;
 
     // ✅ DETECTA POUSO
-    if (z < 0.5) {
-      RCLCPP_WARN(this->get_logger(), "\n🛬🛬🛬 POUSO DETECTADO! Z = %.2f m", z);
+    if (z < 0.1) {
       pouso_em_andamento_ = true;
       controlador_ativo_ = false;
       state_voo_ = 4;
@@ -508,8 +507,8 @@ private:
     // ==========================================
     else if (state_voo_ == 3) {
 
-      // ✅ NOVO! Detectar pouso durante trajetória (Z real < 0.5)
-      if (current_z_real_ < 0.5) {
+      // ✅ NOVO! Detectar pouso durante trajetória (Z real < 0.1)
+      if (current_z_real_ < 0.1) {
         RCLCPP_WARN(this->get_logger(), "\n🛬🛬🛬 POUSO DETECTADO DURANTE TRAJETÓRIA! Z = %.2f m", current_z_real_);
         pouso_em_andamento_ = true;
         controlador_ativo_ = false;
