@@ -37,7 +37,7 @@ public:
       RCLCPP_WARN(this->get_logger(), "⚠️ Timeout aguardando pose. Mantendo última posição conhecida...");
       // NÃO reseta X e Y - mantém o que foi recebido (ou 0,0 se nada foi recebido)
       // Apenas ajusta Z se estiver abaixo de um valor seguro
-      if (current_pose_.pose.position.z < 0.5) {
+      if (current_pose_.pose.position.z < 0.1) {
         current_pose_.pose.position.z = 2.0;  // Altura segura
       }
       RCLCPP_INFO(this->get_logger(), "✅ Usando última pose: X=%.2f, Y=%.2f, Z=%.2f",
@@ -55,7 +55,7 @@ public:
 
     RCLCPP_INFO(this->get_logger(), "✅ Waypoints de pouso publicados! Aguardando pouso...");
 
-    // Aguarda o drone pousar de fato (Z < 0.5 m) antes de encerrar
+    // Aguarda o drone pousar de fato (Z < 0.1 m) antes de encerrar
     // Só aguarda se temos dados reais de pose
     if (pose_received_) {
       rclcpp::Rate wait_rate(10);
