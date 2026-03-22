@@ -27,6 +27,13 @@ def generate_launch_description():
         output='screen'
     )
 
+    camera_viewer = Node(
+        package='drone_control',
+        executable='camera_viewer',
+        name='camera_viewer',
+        output='screen'
+    )
+
     delay_start = RegisterEventHandler(
         OnProcessExit(
             target_action=soft_land,
@@ -43,6 +50,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        camera_viewer,
         soft_land,
         delay_start
     ])
