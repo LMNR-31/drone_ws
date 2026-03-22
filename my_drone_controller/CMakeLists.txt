@@ -64,4 +64,10 @@ install(TARGETS
   DESTINATION lib/${PROJECT_NAME}
 )
 
+# Instala o diretório de configuração para que o arquivo drone_config.yaml
+# seja acessível via 'share/<package>/config/drone_config.yaml'.
+install(DIRECTORY config/
+  DESTINATION share/${PROJECT_NAME}/config
+)
+
 ament_package()

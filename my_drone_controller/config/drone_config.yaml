@@ -1,0 +1,38 @@
+# drone_config.yaml
+# ROS 2 parameter file for the drone_controller_completo node.
+# Launch with:
+#   ros2 run my_drone_controller drone_node \
+#            --ros-args --params-file /path/to/drone_config.yaml
+
+drone_controller_completo:
+  ros__parameters:
+
+    # ── Altitude ────────────────────────────────────────────────────────
+    # Target hover altitude (metres)
+    hover_altitude: 2.0
+
+    # Hysteresis margin below hover_altitude used to detect arrival (metres)
+    hover_altitude_margin: 0.05
+
+    # Maximum permitted altitude for incoming waypoints (metres)
+    max_altitude: 500.0
+
+    # Time spent publishing each waypoint during trajectory execution (seconds)
+    waypoint_duration: 4.0
+
+    # ── Validation limits ────────────────────────────────────────────────
+    # Maximum allowed |X| or |Y| distance for incoming waypoints (metres)
+    max_waypoint_distance: 100.0
+
+    # Z value below which the drone is considered to be landing (metres)
+    land_z_threshold: 0.1
+
+    # ── Timeouts ─────────────────────────────────────────────────────────
+    # Timeout waiting for OFFBOARD + ARM confirmation from FCU (seconds)
+    activation_timeout: 5.0
+
+    # Timeout before a pending command is automatically marked TIMEOUT (seconds)
+    command_timeout: 15.0
+
+    # Time to wait after landing is detected before requesting DISARM (seconds)
+    landing_timeout: 3.0
