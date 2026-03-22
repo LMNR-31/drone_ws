@@ -50,7 +50,11 @@ windows:
         - |
           waitForPX4; sleep 3
           source ~/ros2_ws/install/setup.bash
-          python3 ./custom_status/drone_status_monitor.py
+          # Restart monitor automatically if it crashes
+          while true; do
+            python3 ./custom_status/drone_status_monitor.py
+            echo "[monitor] reiniciando em 3s..."; sleep 3
+          done
 
   # ── 5. RViz visualisation ──────────────────────────────────────────────────
   - rviz:
@@ -66,8 +70,7 @@ windows:
           waitForGazebo; sleep 5
           waitForPX4; sleep 2
           source ~/ros2_ws/install/setup.bash
-          ros2 run my_drone_controller drone_node --ros-args \
-            --params-file "$DRONE_CONFIG" \
+          ros2 launch my_drone_controller drone_controller.launch.py \
             2>&1 | tee -a /tmp/drone_logs/drone_controller_$(date +%Y%m%d_%H%M%S).log
 
   # ── 7. Debug console ───────────────────────────────────────────────────────

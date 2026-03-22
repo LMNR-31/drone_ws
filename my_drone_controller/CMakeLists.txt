@@ -70,4 +70,10 @@ install(DIRECTORY config/
   DESTINATION share/${PROJECT_NAME}/config
 )
 
+# Instala o launch file para que seja acessível via
+# 'ros2 launch my_drone_controller drone_controller.launch.py'.
+install(DIRECTORY launch/
+  DESTINATION share/${PROJECT_NAME}/launch
+)
+
 ament_package()
