@@ -53,9 +53,33 @@ public:
 
     publishLandingWaypoints();
 
-    RCLCPP_INFO(this->get_logger(), "✅ Waypoints de pouso publicados! Finalizando nó");
+    RCLCPP_INFO(this->get_logger(), "✅ Waypoints de pouso publicados! Aguardando pouso...");
 
-    // Aguarda um pouco para garantir que foi publicado
+    // Aguarda o drone pousar de fato (Z < 0.5 m) antes de encerrar
+    // Só aguarda se temos dados reais de pose
+    if (pose_received_) {
+      rclcpp::Rate wait_rate(10);
+      int land_timeout = 0;
+      const int max_wait_cycles = 300; // 30 segundos máximo
+      while (current_pose_.pose.position.z > 0.5 && land_timeout < max_wait_cycles) {
+        rclcpp::spin_some(this->get_node_base_interface());
+        wait_rate.sleep();
+        land_timeout++;
+        if (land_timeout % 20 == 0) {
+          RCLCPP_INFO(this->get_logger(), "  📍 Pousando... Z atual: %.2f m", current_pose_.pose.position.z);
+        }
+      }
+
+      if (current_pose_.pose.position.z <= 0.5) {
+        RCLCPP_INFO(this->get_logger(), "✅ Pouso confirmado! Z=%.2f m", current_pose_.pose.position.z);
+      } else {
+        RCLCPP_WARN(this->get_logger(), "⚠️ Timeout aguardando pouso! Z=%.2f m", current_pose_.pose.position.z);
+      }
+    } else {
+      RCLCPP_WARN(this->get_logger(), "⚠️ Sem dados de pose - não é possível confirmar pouso");
+    }
+
+    RCLCPP_INFO(this->get_logger(), "✅ Finalizando nó drone_publish_landing_waypoints");
     std::this_thread::sleep_for(std::chrono::seconds(1));
     rclcpp::shutdown();
   }

@@ -48,7 +48,7 @@ private:
     // REPOUSO: 5 SEGUNDOS
     // ==========================================
     RCLCPP_INFO(this->get_logger(), "╔════════════════════════════════════════════════════╗");
-    RCLCPP_INFO(this->get_logger(), "║  ⏳ REPOUSO: 5 SEGUNDOS                            ║");
+    RCLCPP_INFO(this->get_logger(), "║  ⏳ FASE 2: REPOUSO 5 SEGUNDOS                     ║");
     RCLCPP_INFO(this->get_logger(), "╚════════════════════════════════════════════════════╝\n");
 
     for (int i = 5; i > 0; i--) {
@@ -59,10 +59,10 @@ private:
     RCLCPP_INFO(this->get_logger(), "✅ Repouso concluído!\n");
 
     // ==========================================
-    // FASE 2: ATIVAR DRONE E EXECUTAR
+    // FASE 3: ATIVAR DRONE E EXECUTAR
     // ==========================================
     RCLCPP_INFO(this->get_logger(), "╔════════════════════════════════════════════════════╗");
-    RCLCPP_INFO(this->get_logger(), "║  🚁 FASE 2: ATIVAR DRONE E EXECUTAR                ║");
+    RCLCPP_INFO(this->get_logger(), "║  🚁 FASE 3: ATIVAR DRONE E EXECUTAR                ║");
     RCLCPP_INFO(this->get_logger(), "╚════════════════════════════════════════════════════╝\n");
 
     RCLCPP_INFO(this->get_logger(), "🔄 Executando: ros2 run drone_control drone_activate_and_go_forward\n");
