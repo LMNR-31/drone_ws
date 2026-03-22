@@ -330,7 +330,6 @@ private:
       controlador_ativo_ = false;
       state_voo_ = 4;
       RCLCPP_WARN(this->get_logger(), "🛬 CONTROLADOR DESLIGADO - DEIXANDO drone_soft_land POUSAR\n");
-      return;
     }
 
     // ✅ ESTADO 4: POUSO EM ANDAMENTO
@@ -346,7 +345,6 @@ private:
         takeoff_counter_ = 0;
         pouso_em_andamento_ = false;
       }
-      return;  // Sempre retorna no estado 4 — não atualiza last_waypoint_goal_!
     }
 
     // ✅ Em ESTADO 3 (trajetória), armazena setpoints relativos em trajectory_setpoint_
@@ -357,7 +355,6 @@ private:
       trajectory_setpoint_[2] = z;  // Z absoluto da trajetória
       controlador_ativo_ = true;
       pouso_em_andamento_ = false;
-      return;
     }
 
     // ✅ NOVO WAYPOINT RECEBIDO (aceita mesmo que repetido)
