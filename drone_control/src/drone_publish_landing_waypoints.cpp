@@ -96,14 +96,14 @@ private:
     double landing_z = 0.05;
     double delta_z = current_z - landing_z;
 
-    // ✅ Descida em 5 waypoints (0%, 25%, 50%, 75%, 100%)
-    for (int i = 0; i <= 4; i++) {
+    // ✅ Descida em 2 waypoints (início e solo)
+    for (int i = 0; i <= 1; i++) {
       auto pose = geometry_msgs::msg::Pose();
       pose.position.x = current_pose_.pose.position.x;
       pose.position.y = current_pose_.pose.position.y;
 
       // Descida linear: começa em current_z, termina em 0.05
-      double progress = static_cast<double>(i) / 4.0;  // 0.0 → 1.0
+      double progress = static_cast<double>(i) / 1.0;  // 0.0 → 1.0
       pose.position.z = current_z - (delta_z * progress);
 
       pose.orientation.w = 1.0;
@@ -118,7 +118,7 @@ private:
       current_pose_.pose.position.x,
       current_pose_.pose.position.y);
     RCLCPP_INFO(this->get_logger(),
-      "   Descida: %.2f m → 0.05 m (5 waypoints)",
+      "   Descida: %.2f m → 0.05 m (2 waypoints)",
       current_z);
 
     for (size_t i = 0; i < msg.poses.size(); i++) {
