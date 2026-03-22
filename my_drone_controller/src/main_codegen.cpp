@@ -264,6 +264,13 @@ private:
     // ==========================================
     if (msg->poses.size() >= 2) {
 
+      // ✅ Se pouso em andamento (estado 4), ignora novos waypoints
+      // para não corromper last_waypoint_goal_
+      if (state_voo_ == 4) {
+        RCLCPP_WARN(this->get_logger(), "⚠️ Ignorando waypoints durante pouso (estado 4)");
+        return;
+      }
+
       RCLCPP_INFO(this->get_logger(), "🔍 Trajetória (2+ waypoints) recebida");
       RCLCPP_INFO(this->get_logger(), "   state_voo_=%d (esperado 2 para ativar)", state_voo_);
 
@@ -326,18 +333,20 @@ private:
       return;
     }
 
-    // ✅ DETECTA DISARM em ESTADO 4
-    // Quando drone é desarmado após pouso, reseta flags para novo ciclo
-    if (state_voo_ == 4 && !current_state_.armed) {
-      RCLCPP_INFO(this->get_logger(), "✅ DRONE DESARMADO! Pronto para novo ciclo");
+    // ✅ ESTADO 4: POUSO EM ANDAMENTO
+    // Nunca atualiza last_waypoint_goal_ durante pouso, independente do estado de arme
+    if (state_voo_ == 4) {
+      if (!current_state_.armed) {
+        RCLCPP_INFO(this->get_logger(), "✅ DRONE DESARMADO! Pronto para novo ciclo");
 
-      // ✅ RESETAR FLAGS PARA NOVO CICLO
-      offboard_activated_ = false;
-      activation_confirmed_ = false;
-      state_voo_ = 0;
-      takeoff_counter_ = 0;
-      pouso_em_andamento_ = false;
-      return;
+        // ✅ RESETAR FLAGS PARA NOVO CICLO
+        offboard_activated_ = false;
+        activation_confirmed_ = false;
+        state_voo_ = 0;
+        takeoff_counter_ = 0;
+        pouso_em_andamento_ = false;
+      }
+      return;  // Sempre retorna no estado 4 — não atualiza last_waypoint_goal_!
     }
 
     // ✅ Em ESTADO 3 (trajetória), armazena setpoints relativos em trajectory_setpoint_
