@@ -83,6 +83,7 @@ private:
     CONFIRM_ACTIVATION,
     ACTIVATED,
     PUBLISH_WAYPOINTS,
+    VERIFY_TAKEOFF,
     FINISH
   };
 
@@ -178,8 +179,61 @@ private:
     case StateMachine::PUBLISH_WAYPOINTS:
       if ((this->now() - publish_time_) > rclcpp::Duration(2s))
       {
-        RCLCPP_INFO(this->get_logger(), "✅ Waypoints de levantamento enviados. Finalizando nó.\n");
-        state_ = StateMachine::FINISH;
+        RCLCPP_INFO(this->get_logger(), "✅ Waypoints de levantamento enviados. Verificando decolagem...\n");
+        state_ = StateMachine::VERIFY_TAKEOFF;
+        verify_start_time_ = this->now();
+        verify_attempts_ = 0;
+      }
+      break;
+
+    case StateMachine::VERIFY_TAKEOFF:
+      if (cycle_count_ % 20 == 0)
+      {
+        RCLCPP_INFO(this->get_logger(), "⬆️ Verificando decolagem... Altitude: %.2fm (threshold: %.2fm)",
+          current_z_, altitude_threshold_);
+      }
+      if ((this->now() - verify_start_time_) > rclcpp::Duration(3s))
+      {
+        bool altitude_ok = current_z_ > altitude_threshold_;
+        bool mode_ok = current_state_.armed && current_state_.mode == "OFFBOARD";
+
+        if (altitude_ok && mode_ok)
+        {
+          RCLCPP_INFO(this->get_logger(),
+            "✅ Decolagem confirmada! Altitude: %.2fm | OFFBOARD+ARMED\n", current_z_);
+          state_ = StateMachine::FINISH;
+        }
+        else
+        {
+          verify_attempts_++;
+          if (!altitude_ok)
+          {
+            RCLCPP_WARN(this->get_logger(), "⚠️ Altitude insuficiente: %.2fm < %.2fm",
+              current_z_, altitude_threshold_);
+          }
+          if (!mode_ok)
+          {
+            RCLCPP_WARN(this->get_logger(), "⚠️ Modo incorreto: armed=%d, mode=%s",
+              current_state_.armed, current_state_.mode.c_str());
+          }
+
+          if (verify_attempts_ < max_verify_attempts_)
+          {
+            RCLCPP_WARN(this->get_logger(),
+              "⚠️ Decolagem inefetiva, tentando novamente... (%d/%d)",
+              verify_attempts_, max_verify_attempts_);
+            publishTakeoffWaypoints();
+            publish_time_ = this->now();
+            state_ = StateMachine::PUBLISH_WAYPOINTS;
+          }
+          else
+          {
+            RCLCPP_ERROR(this->get_logger(),
+              "❌ Falha na verificação de decolagem após %d tentativas. Finalizando.",
+              max_verify_attempts_);
+            state_ = StateMachine::FINISH;
+          }
+        }
       }
       break;
 
@@ -280,6 +334,12 @@ private:
 
   // Contador de ciclos para debug
   int cycle_count_{0};
+
+  // Verificação de decolagem
+  static constexpr double altitude_threshold_{0.5};
+  static constexpr int max_verify_attempts_{3};
+  rclcpp::Time verify_start_time_;
+  int verify_attempts_{0};
 };
 
 int main(int argc, char **argv)
