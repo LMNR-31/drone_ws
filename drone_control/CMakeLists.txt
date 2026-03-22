@@ -12,6 +12,10 @@ find_package(geometry_msgs REQUIRED)
 find_package(mrs_msgs REQUIRED)
 find_package(mavros_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(image_transport REQUIRED)
+find_package(cv_bridge REQUIRED)
+find_package(OpenCV REQUIRED)
 
 
 # Adicionar no final do arquivo drone_control/CMakeLists.txt:
@@ -66,7 +70,21 @@ install(TARGETS drone_publish_landing_waypoints
 install(PROGRAMS
   src/camera_viewer.py
   DESTINATION lib/${PROJECT_NAME}
-  RENAME camera_viewer
+  RENAME camera_viewer.py
+)
+
+add_executable(camera_viewer src/camera_viewer.cpp)
+
+ament_target_dependencies(camera_viewer
+  rclcpp
+  image_transport
+  cv_bridge
+  sensor_msgs
+  OpenCV
+)
+
+install(TARGETS camera_viewer
+  DESTINATION lib/${PROJECT_NAME}
 )
 
 if(BUILD_TESTING)
