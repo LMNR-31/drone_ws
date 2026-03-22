@@ -9,8 +9,191 @@
 #include <cmath>
 #include <mutex>
 #include <atomic>
+#include <chrono>
+#include <ctime>
+#include <fstream>
+#include <iomanip>
+#include <map>
+#include <sstream>
+#include <string>
 
 using namespace std::chrono_literals;
+
+// ============================================================
+// SISTEMA DE FILA DE COMANDOS COM RASTREABILIDADE
+// ============================================================
+
+enum class CommandType {
+  ARM,
+  DISARM,
+  SET_MODE_OFFBOARD,
+  TAKEOFF,
+  HOVER,
+  TRAJECTORY,
+  LAND
+};
+
+enum class CommandStatus {
+  PENDING,    // PENDENTE
+  CONFIRMED,  // CONFIRMADO
+  FAILED,     // FALHO
+  TIMEOUT     // TIMEOUT
+};
+
+struct Command {
+  uint64_t id{0};
+  CommandType type{CommandType::ARM};
+  CommandStatus status{CommandStatus::PENDING};
+  std::chrono::system_clock::time_point timestamp{};
+  std::chrono::system_clock::time_point confirm_time{};
+  std::map<std::string, std::string> data;
+
+  std::string type_str() const {
+    switch (type) {
+      case CommandType::ARM:               return "ARM";
+      case CommandType::DISARM:            return "DISARM";
+      case CommandType::SET_MODE_OFFBOARD: return "SET_MODE_OFFBOARD";
+      case CommandType::TAKEOFF:           return "TAKEOFF";
+      case CommandType::HOVER:             return "HOVER";
+      case CommandType::TRAJECTORY:        return "TRAJECTORY";
+      case CommandType::LAND:              return "LAND";
+      default:                             return "DESCONHECIDO";
+    }
+  }
+
+  std::string status_str() const {
+    switch (status) {
+      case CommandStatus::PENDING:   return "PENDENTE";
+      case CommandStatus::CONFIRMED: return "CONFIRMADO";
+      case CommandStatus::FAILED:    return "FALHO";
+      case CommandStatus::TIMEOUT:   return "TIMEOUT";
+      default:                       return "DESCONHECIDO";
+    }
+  }
+};
+
+class CommandQueue {
+public:
+  CommandQueue() : next_id_(1) {}
+
+  // Enfileira um novo comando e retorna seu ID único
+  uint64_t enqueue(CommandType type,
+                   const std::map<std::string, std::string> & data = {}) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    Command cmd;
+    cmd.id = next_id_++;
+    cmd.type = type;
+    cmd.status = CommandStatus::PENDING;
+    cmd.timestamp = std::chrono::system_clock::now();
+    cmd.data = data;
+    pending_[cmd.id] = cmd;
+    history_.push_back(cmd);
+    return cmd.id;
+  }
+
+  // Confirma ou marca como falho um comando pendente
+  bool confirm(uint64_t id, bool success = true) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = pending_.find(id);
+    if (it == pending_.end()) {
+      return false;
+    }
+    CommandStatus new_status = success ? CommandStatus::CONFIRMED : CommandStatus::FAILED;
+    it->second.status = new_status;
+    it->second.confirm_time = std::chrono::system_clock::now();
+    for (auto & h : history_) {
+      if (h.id == id) {
+        h.status = new_status;
+        h.confirm_time = it->second.confirm_time;
+        break;
+      }
+    }
+    pending_.erase(it);
+    return true;
+  }
+
+  // Verifica timeouts e retorna IDs que expiraram
+  std::vector<uint64_t> check_timeouts(double timeout_seconds) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<uint64_t> timed_out;
+    auto now = std::chrono::system_clock::now();
+    for (auto it = pending_.begin(); it != pending_.end(); ) {
+      double elapsed =
+        std::chrono::duration<double>(now - it->second.timestamp).count();
+      if (elapsed > timeout_seconds) {
+        it->second.status = CommandStatus::TIMEOUT;
+        for (auto & h : history_) {
+          if (h.id == it->second.id) {
+            h.status = CommandStatus::TIMEOUT;
+            break;
+          }
+        }
+        timed_out.push_back(it->second.id);
+        it = pending_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    return timed_out;
+  }
+
+  const std::vector<Command> & get_history() const { return history_; }
+
+  size_t pending_count() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return pending_.size();
+  }
+
+  // Salva histórico completo em arquivo de log estruturado
+  void save_log(const std::string & filename) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::ofstream file(filename);
+    if (!file.is_open()) {
+      std::cerr << "[CommandQueue] ERRO: Não foi possível abrir arquivo de log: "
+                << filename << "\n";
+      return;
+    }
+    file << "=== HISTÓRICO DE COMANDOS DO DRONE ===\n";
+    file << "Total: " << history_.size() << " comandos\n\n";
+    for (const auto & cmd : history_) {
+      std::time_t t = std::chrono::system_clock::to_time_t(cmd.timestamp);
+      std::tm tm_buf{};
+#ifdef _WIN32
+      localtime_s(&tm_buf, &t);
+#else
+      localtime_r(&t, &tm_buf);
+#endif
+      file << std::put_time(&tm_buf, "[%Y-%m-%d %H:%M:%S]")
+           << " ID=" << std::setw(4) << std::right << cmd.id
+           << " | TIPO="   << std::setw(18) << std::left << cmd.type_str()
+           << " | STATUS=" << std::setw(10) << std::left << cmd.status_str();
+      if (!cmd.data.empty()) {
+        file << " | DADOS={";
+        bool first = true;
+        for (const auto & kv : cmd.data) {
+          if (!first) { file << ", "; }
+          file << kv.first << "=" << kv.second;
+          first = false;
+        }
+        file << "}";
+      }
+      if (cmd.status == CommandStatus::CONFIRMED ||
+          cmd.status == CommandStatus::FAILED) {
+        double elapsed = std::chrono::duration<double>(
+          cmd.confirm_time - cmd.timestamp).count();
+        file << " | TEMPO=" << std::fixed << std::setprecision(2) << elapsed << "s";
+      }
+      file << "\n";
+    }
+    file.close();
+  }
+
+private:
+  mutable std::mutex mutex_;
+  uint64_t next_id_;
+  std::map<uint64_t, Command> pending_;
+  std::vector<Command> history_;
+};
 
 class DroneControllerCompleto : public rclcpp::Node {
 public:
@@ -132,8 +315,27 @@ private:
     auto request = std::make_shared<mavros_msgs::srv::SetMode::Request>();
     request->custom_mode = "OFFBOARD";
 
-    mode_client_->async_send_request(request);
-    RCLCPP_INFO(this->get_logger(), "📡 Solicitando OFFBOARD MODE...");
+    uint64_t cmd_id = cmd_queue_.enqueue(
+      CommandType::SET_MODE_OFFBOARD, {{"mode", "OFFBOARD"}});
+    offboard_cmd_id_ = cmd_id;
+
+    auto callback = [this, cmd_id](
+      rclcpp::Client<mavros_msgs::srv::SetMode>::SharedFuture future) {
+      auto result = future.get();
+      bool mode_set_success = result && result->mode_sent;
+      cmd_queue_.confirm(cmd_id, mode_set_success);
+      if (mode_set_success) {
+        RCLCPP_INFO(this->get_logger(),
+          "✅ [ID=%lu] SET_MODE OFFBOARD aceito pelo FCU", cmd_id);
+      } else {
+        RCLCPP_WARN(this->get_logger(),
+          "⚠️ [ID=%lu] SET_MODE OFFBOARD rejeitado pelo FCU", cmd_id);
+      }
+    };
+
+    mode_client_->async_send_request(request, callback);
+    RCLCPP_INFO(this->get_logger(),
+      "📡 [ID=%lu] Solicitando OFFBOARD MODE...", cmd_id);
   }
 
   // ==========================================
@@ -147,8 +349,25 @@ private:
     auto request = std::make_shared<mavros_msgs::srv::CommandBool::Request>();
     request->value = true; // true = armar, false = desarmar
 
-    arm_client_->async_send_request(request);
-    RCLCPP_INFO(this->get_logger(), "🔋 Solicitando ARM...");
+    uint64_t cmd_id = cmd_queue_.enqueue(CommandType::ARM);
+    arm_cmd_id_ = cmd_id;
+
+    auto callback = [this, cmd_id](
+      rclcpp::Client<mavros_msgs::srv::CommandBool>::SharedFuture future) {
+      auto result = future.get();
+      bool arm_confirmed = result && result->success;
+      cmd_queue_.confirm(cmd_id, arm_confirmed);
+      if (arm_confirmed) {
+        RCLCPP_INFO(this->get_logger(),
+          "✅ [ID=%lu] ARM confirmado pelo FCU", cmd_id);
+      } else {
+        RCLCPP_WARN(this->get_logger(),
+          "⚠️ [ID=%lu] ARM rejeitado pelo FCU", cmd_id);
+      }
+    };
+
+    arm_client_->async_send_request(request, callback);
+    RCLCPP_INFO(this->get_logger(), "🔋 [ID=%lu] Solicitando ARM...", cmd_id);
   }
 
   // ==========================================
@@ -162,8 +381,25 @@ private:
     auto request = std::make_shared<mavros_msgs::srv::CommandBool::Request>();
     request->value = false; // false = desarmar
 
-    arm_client_->async_send_request(request);
-    RCLCPP_INFO(this->get_logger(), "🔴 Solicitando DISARM...");
+    uint64_t cmd_id = cmd_queue_.enqueue(CommandType::DISARM);
+    disarm_cmd_id_ = cmd_id;
+
+    auto callback = [this, cmd_id](
+      rclcpp::Client<mavros_msgs::srv::CommandBool>::SharedFuture future) {
+      auto result = future.get();
+      bool disarm_confirmed = result && result->success;
+      cmd_queue_.confirm(cmd_id, disarm_confirmed);
+      if (disarm_confirmed) {
+        RCLCPP_INFO(this->get_logger(),
+          "✅ [ID=%lu] DISARM confirmado pelo FCU", cmd_id);
+      } else {
+        RCLCPP_WARN(this->get_logger(),
+          "⚠️ [ID=%lu] DISARM rejeitado pelo FCU", cmd_id);
+      }
+    };
+
+    arm_client_->async_send_request(request, callback);
+    RCLCPP_INFO(this->get_logger(), "🔴 [ID=%lu] Solicitando DISARM...", cmd_id);
   }
 
   // ==========================================
@@ -200,6 +436,9 @@ private:
       pouso_em_andamento_ = true;
       controlador_ativo_ = false;
       state_voo_ = 4; // ✅ VAI DIRETO PARA ESTADO 4!
+      land_cmd_id_ = cmd_queue_.enqueue(CommandType::LAND, {{"z", std::to_string(last_z)}});
+      RCLCPP_WARN(this->get_logger(),
+        "📋 [ID=%lu] Comando LAND enfileirado", land_cmd_id_);
       RCLCPP_WARN(this->get_logger(), "🛬 CONTROLADOR DESLIGADO - DEIXANDO drone_soft_land POUSAR\n");
       return;
     }
@@ -241,6 +480,15 @@ private:
       // ✅ Solicita OFFBOARD MODE e ARM
       request_offboard();
       request_arm();
+
+      // ✅ Enfileira comando de TAKEOFF
+      takeoff_cmd_id_ = cmd_queue_.enqueue(
+        CommandType::TAKEOFF,
+        {{"x", std::to_string(msg->poses[0].position.x)},
+         {"y", std::to_string(msg->poses[0].position.y)},
+         {"z", "2.0"}});
+      RCLCPP_INFO(this->get_logger(),
+        "📋 [ID=%lu] Comando TAKEOFF enfileirado", takeoff_cmd_id_);
 
       // ✅ Marca como ativado e aguarda confirmação do FCU
       offboard_activated_ = true;
@@ -303,6 +551,20 @@ private:
       // ✅ Se EM HOVER (ESTADO 2), ativa trajetória IMEDIATAMENTE
       RCLCPP_INFO(this->get_logger(), "\n✅ TRAJETÓRIA ACEITA E ATIVADA! Drone em HOVER pronto!\n");
 
+      // ✅ Confirma comando de HOVER e inicia TRAJECTORY
+      if (hover_cmd_id_ != 0) {
+        cmd_queue_.confirm(hover_cmd_id_, true);
+        RCLCPP_INFO(this->get_logger(),
+          "✅ [ID=%lu] HOVER confirmado - iniciando trajetória", hover_cmd_id_);
+        hover_cmd_id_ = 0;
+      }
+      trajectory_cmd_id_ = cmd_queue_.enqueue(
+        CommandType::TRAJECTORY,
+        {{"waypoints", std::to_string(msg->poses.size())}});
+      RCLCPP_INFO(this->get_logger(),
+        "📋 [ID=%lu] Comando TRAJECTORY enfileirado (%zu WPs)",
+        trajectory_cmd_id_, msg->poses.size());
+
       controlador_ativo_ = true;   // ← Ativa agora!
       pouso_em_andamento_ = false;
       state_voo_ = 3; // ✅ ESTADO 3: TRAJETÓRIA
@@ -329,7 +591,10 @@ private:
       pouso_em_andamento_ = true;
       controlador_ativo_ = false;
       state_voo_ = 4;
-      RCLCPP_WARN(this->get_logger(), "🛬 POUSO DETECTADO! Z = %.2f m", z);
+      land_cmd_id_ = cmd_queue_.enqueue(CommandType::LAND, {{"z", std::to_string(z)}});
+      RCLCPP_WARN(this->get_logger(),
+        "🛬 [ID=%lu] POUSO DETECTADO! Z = %.2f m - Comando LAND enfileirado",
+        land_cmd_id_, z);
       return;
     }
 
@@ -381,6 +646,16 @@ private:
     pose_msg.header.frame_id = "map";
 
     cycle_count_++;
+
+    // ✅ Verificação periódica de timeouts e salvamento de log (a cada ~10 segundos)
+    if (cycle_count_ % 1000 == 0) {
+      auto timed_out = cmd_queue_.check_timeouts(15.0);
+      for (auto id : timed_out) {
+        RCLCPP_WARN(this->get_logger(),
+          "⏰ [ID=%lu] Comando TIMEOUT! (>15s sem confirmação)", id);
+      }
+      cmd_queue_.save_log("/tmp/drone_commands.log");
+    }
 
     // ==========================================
     // ESTADO 0: AGUARDANDO NOVO WAYPOINT
@@ -472,6 +747,21 @@ private:
       if (current_z_real_ >= 1.95) {
         RCLCPP_INFO(this->get_logger(),
           "✅ Decolagem concluída! Altitude = %.2fm\n", current_z_real_);
+        // ✅ Confirma comando TAKEOFF
+        if (takeoff_cmd_id_ != 0) {
+          cmd_queue_.confirm(takeoff_cmd_id_, true);
+          RCLCPP_INFO(this->get_logger(),
+            "✅ [ID=%lu] TAKEOFF confirmado! Altitude=%.2fm", takeoff_cmd_id_, current_z_real_);
+          takeoff_cmd_id_ = 0;
+        }
+        // ✅ Inicia comando HOVER
+        hover_cmd_id_ = cmd_queue_.enqueue(
+          CommandType::HOVER,
+          {{"x", std::to_string(last_waypoint_goal_.pose.position.x)},
+           {"y", std::to_string(last_waypoint_goal_.pose.position.y)},
+           {"z", "2.0"}});
+        RCLCPP_INFO(this->get_logger(),
+          "📋 [ID=%lu] Comando HOVER enfileirado", hover_cmd_id_);
         state_voo_ = 2;
         takeoff_counter_ = 0;
         return;
@@ -519,6 +809,20 @@ private:
       // ✅ NOVO! Detectar pouso durante trajetória (Z real < 0.1)
       if (current_z_real_ < 0.1) {
         RCLCPP_WARN(this->get_logger(), "\n🛬🛬🛬 POUSO DETECTADO DURANTE TRAJETÓRIA! Z = %.2f m", current_z_real_);
+        // ✅ Marca TRAJECTORY como falha (interrompida por pouso)
+        if (trajectory_cmd_id_ != 0) {
+          cmd_queue_.confirm(trajectory_cmd_id_, false);
+          RCLCPP_WARN(this->get_logger(),
+            "⚠️ [ID=%lu] TRAJECTORY interrompida por pouso", trajectory_cmd_id_);
+          trajectory_cmd_id_ = 0;
+        }
+        // ✅ Enfileira LAND se não enfileirado
+        if (land_cmd_id_ == 0) {
+          land_cmd_id_ = cmd_queue_.enqueue(
+            CommandType::LAND, {{"z", std::to_string(current_z_real_)}});
+          RCLCPP_WARN(this->get_logger(),
+            "📋 [ID=%lu] Comando LAND enfileirado (pouso durante trajetória)", land_cmd_id_);
+        }
         pouso_em_andamento_ = true;
         controlador_ativo_ = false;
         state_voo_ = 4;
@@ -579,6 +883,17 @@ private:
           current_z_real_,
           progress_pct);
       }
+
+      // ✅ Confirma TRAJECTORY quando todos os waypoints foram visitados
+      {
+        double total_time = waypoint_duration_ * (double)trajectory_waypoints_.size();
+        if (elapsed_time >= total_time && trajectory_cmd_id_ != 0) {
+          cmd_queue_.confirm(trajectory_cmd_id_, true);
+          RCLCPP_INFO(this->get_logger(),
+            "✅ [ID=%lu] TRAJECTORY confirmada - todos os waypoints visitados", trajectory_cmd_id_);
+          trajectory_cmd_id_ = 0;
+        }
+      }
     }
 
     // ==========================================
@@ -605,6 +920,18 @@ private:
           // ✅ DISARM
           request_disarm();
 
+          // ✅ Confirma comando LAND
+          if (land_cmd_id_ != 0) {
+            cmd_queue_.confirm(land_cmd_id_, true);
+            RCLCPP_WARN(this->get_logger(),
+              "✅ [ID=%lu] LAND confirmado - pouso concluído", land_cmd_id_);
+            land_cmd_id_ = 0;
+          }
+          // ✅ Salva log persistente do histórico de comandos
+          cmd_queue_.save_log("/tmp/drone_commands.log");
+          RCLCPP_INFO(this->get_logger(),
+            "💾 Histórico de comandos salvo em /tmp/drone_commands.log");
+
           RCLCPP_WARN(this->get_logger(),
             "\n✅ POUSO CONCLUÍDO! Aguardando novo comando de waypoint para decolar novamente...\n");
 
@@ -620,6 +947,10 @@ private:
           takeoff_counter_ = 0;
           trajectory_waypoints_.clear();
           current_waypoint_idx_ = 0;
+          takeoff_cmd_id_ = 0;
+          hover_cmd_id_ = 0;
+          trajectory_cmd_id_ = 0;
+          land_cmd_id_ = 0;
 
           // ✅ Log de verificação
           RCLCPP_WARN(this->get_logger(), "🔍 DEBUG RESET EM ESTADO 4:");
@@ -691,6 +1022,18 @@ private:
 
   // Sincronização thread-safe
   std::mutex mutex_;
+
+  // ==========================================
+  // SISTEMA DE FILA DE COMANDOS
+  // ==========================================
+  CommandQueue cmd_queue_;              // Fila de comandos thread-safe com histórico
+  uint64_t offboard_cmd_id_{0};        // ID do último comando SET_MODE_OFFBOARD
+  uint64_t arm_cmd_id_{0};             // ID do último comando ARM
+  uint64_t disarm_cmd_id_{0};          // ID do último comando DISARM
+  uint64_t takeoff_cmd_id_{0};         // ID do comando TAKEOFF atual
+  uint64_t hover_cmd_id_{0};           // ID do comando HOVER atual
+  uint64_t trajectory_cmd_id_{0};      // ID do comando TRAJECTORY atual
+  uint64_t land_cmd_id_{0};            // ID do comando LAND atual
 };
 
 int main(int argc, char **argv) {
