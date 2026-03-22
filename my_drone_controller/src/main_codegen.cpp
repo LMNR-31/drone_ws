@@ -251,7 +251,24 @@ bool validate_waypoint(const geometry_msgs::msg::PoseStamped & msg,
   if (std::isnan(pos.x) || std::isnan(pos.y) || std::isnan(pos.z)) return false;
   if (std::isinf(pos.x) || std::isinf(pos.y) || std::isinf(pos.z)) return false;
 
-  if (pos.z < 0.0 || pos.z > config.max_altitude)              return false;
+  // Z < land_z_threshold: landing intent – always accepted regardless of min_altitude.
+  // Skip altitude range checks and fall through to XY validation.
+  if (pos.z >= config.land_z_threshold) {
+    if (pos.z < config.min_altitude) {
+      // Between land_z_threshold and min_altitude: invalid flight altitude
+      RCLCPP_WARN(rclcpp::get_logger("validate_waypoint"),
+        "❌ Waypoint Z=%.2fm REJEITADO: abaixo da altitude mínima de voo (%.2fm)",
+        pos.z, config.min_altitude);
+      return false;
+    }
+    if (pos.z > config.max_altitude) {
+      RCLCPP_WARN(rclcpp::get_logger("validate_waypoint"),
+        "❌ Waypoint Z=%.2fm REJEITADO: acima da altitude máxima (%.2fm)",
+        pos.z, config.max_altitude);
+      return false;
+    }
+  }
+
   if (std::abs(pos.x) > config.max_waypoint_distance)           return false;
   if (std::abs(pos.y) > config.max_waypoint_distance)           return false;
 
@@ -304,6 +321,7 @@ public:
     this->declare_parameter("hover_altitude",        config_.hover_altitude);
     this->declare_parameter("hover_altitude_margin", config_.hover_altitude_margin);
     this->declare_parameter("max_altitude",          config_.max_altitude);
+    this->declare_parameter("min_altitude",          config_.min_altitude);
     this->declare_parameter("waypoint_duration",     config_.waypoint_duration);
     this->declare_parameter("max_waypoint_distance", config_.max_waypoint_distance);
     this->declare_parameter("land_z_threshold",      config_.land_z_threshold);
@@ -314,6 +332,7 @@ public:
     config_.hover_altitude        = this->get_parameter("hover_altitude").as_double();
     config_.hover_altitude_margin = this->get_parameter("hover_altitude_margin").as_double();
     config_.max_altitude          = this->get_parameter("max_altitude").as_double();
+    config_.min_altitude          = this->get_parameter("min_altitude").as_double();
     config_.waypoint_duration     = this->get_parameter("waypoint_duration").as_double();
     config_.max_waypoint_distance = this->get_parameter("max_waypoint_distance").as_double();
     config_.land_z_threshold      = this->get_parameter("land_z_threshold").as_double();
@@ -326,6 +345,9 @@ public:
       config_.hover_altitude, config_.hover_altitude_margin);
     RCLCPP_INFO(this->get_logger(), "   waypoint_duration=%.1f s  command_timeout=%.1f s",
       config_.waypoint_duration, config_.command_timeout);
+    RCLCPP_INFO(this->get_logger(),
+      "⚙️  Configuração de Altitude: Mínima=%.2f m | Pouso detectado: Z < %.2f m | Máxima=%.2f m",
+      config_.min_altitude, config_.land_z_threshold, config_.max_altitude);
 
     // ==========================================
     // PUBLISHERS

@@ -24,6 +24,10 @@ drone_controller_completo:
     # Maximum allowed |X| or |Y| distance for incoming waypoints (metres)
     max_waypoint_distance: 100.0
 
+    # Minimum flight altitude – waypoints with Z in [land_z_threshold, min_altitude)
+    # are rejected; only Z < land_z_threshold (landing intent) is allowed below this.
+    min_altitude: 0.2
+
     # Z value below which the drone is considered to be landing (metres)
     land_z_threshold: 0.1
 

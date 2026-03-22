@@ -23,11 +23,15 @@ struct DroneConfig {
   /// Time spent publishing each waypoint during trajectory execution [s]
   double waypoint_duration{4.0};
 
+  // ── Limites de Segurança ───────────────────────────────────────────────
+  /// Altitude mínima permitida para voo (drone não desce abaixo durante navegação) [m]
+  double min_altitude{0.2};
+  /// Z threshold abaixo do qual o drone é considerado pousado [m]
+  double land_z_threshold{0.1};
+
   // ── Validation limits ─────────────────────────────────────────────────
   /// Maximum allowed |X| or |Y| distance for incoming waypoints [m]
   double max_waypoint_distance{100.0};
-  /// Z threshold below which the drone is considered to be landing [m]
-  double land_z_threshold{0.1};
 
   // ── Timeouts ──────────────────────────────────────────────────────────
   /// Timeout waiting for OFFBOARD + ARM confirmation from FCU [s]
