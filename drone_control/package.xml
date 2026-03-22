@@ -18,7 +18,7 @@
   <depend>mavros_msgs</depend>
   <depend>cv_bridge</depend>
   <depend>image_transport</depend>
-  <depend>libopencv-dev</depend>
+  <depend>opencv</depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   
