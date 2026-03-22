@@ -352,17 +352,7 @@ private:
       return;
     }
 
-    // ✅ IGNORA DUPLICATAS
-    const double eps = 1e-9;
-    if (waypoint_goal_received_ &&
-        std::abs(x - last_waypoint_goal_.pose.position.x) < eps &&
-        std::abs(y - last_waypoint_goal_.pose.position.y) < eps &&
-        std::abs(z - last_waypoint_goal_.pose.position.z) < eps) {
-      RCLCPP_DEBUG(this->get_logger(), "⚠️ Waypoint duplicado ignorado: X=%.2f, Y=%.2f, Z=%.2f", x, y, z);
-      return;
-    }
-
-    // ✅ NOVO WAYPOINT RECEBIDO
+    // ✅ NOVO WAYPOINT RECEBIDO (aceita mesmo que repetido)
     RCLCPP_INFO(this->get_logger(), "\n📍 NOVO WAYPOINT RECEBIDO: X=%.2f, Y=%.2f, Z=%.2f", x, y, z);
 
     last_waypoint_goal_ = *msg;
