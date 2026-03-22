@@ -324,12 +324,12 @@ private:
 
     last_z_ = z;
 
-    // ✅ DETECTA POUSO
-    if (z < 0.1) {
+    // ✅ DETECTA POUSO (só em voo: ESTADO 2 ou 3)
+    if ((state_voo_ == 2 || state_voo_ == 3) && z < 0.1) {
       pouso_em_andamento_ = true;
       controlador_ativo_ = false;
       state_voo_ = 4;
-      RCLCPP_WARN(this->get_logger(), "🛬 CONTROLADOR DESLIGADO - DEIXANDO drone_soft_land POUSAR\n");
+      RCLCPP_WARN(this->get_logger(), "🛬 POUSO DETECTADO! Z = %.2f m", z);
       return;
     }
 
