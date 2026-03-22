@@ -18,40 +18,70 @@ class CameraViewer(Node):
     _LABEL_FONT_SCALE = 0.9
     _LABEL_THICKNESS = 2
 
+    # How often (seconds) to scan for new camera topics
+    _DISCOVERY_PERIOD = 2.0
+
     def __init__(self):
         super().__init__('camera_viewer')
 
         # Parameters
         self.declare_parameter('window_width', 1600)
         self.declare_parameter('window_height', 900)
-        self.declare_parameter('camera_topics', [
-            '/uav1/bluefox_down/image_raw',
-            '/uav1/bluefox_reverse/image_raw',
-            '/uav1/bluefox_front/image_raw',
-        ])
 
         self.window_width = self.get_parameter('window_width').value
         self.window_height = self.get_parameter('window_height').value
-        camera_topics = self.get_parameter('camera_topics').value
 
         self.bridge = CvBridge()
         self.images = OrderedDict()
         self.lock = threading.Lock()
 
-        # Subscribe to each camera topic
-        for topic in camera_topics:
-            self.create_subscription(
-                Image,
-                topic,
-                lambda msg, t=topic: self._image_callback(msg, t),
-                10,
-            )
-            self.get_logger().info(f'Subscribed to: {topic}')
+        # Track already-subscribed topics so we don't double-subscribe
+        self._subscribed_topics: set = set()
+        self._subs_lock = threading.Lock()
+        self._subscriptions: list = []
+
+        # Initial discovery + periodic re-scan timer
+        self._discover_cameras()
+        self._discovery_timer = self.create_timer(self._DISCOVERY_PERIOD, self._discover_cameras)
 
         # Display loop runs in a separate thread so ROS spin is not blocked
         self._running = True
         self._display_thread = threading.Thread(target=self._display_loop, daemon=True)
         self._display_thread.start()
+
+    def _is_camera_topic(self, topic: str, types: list) -> bool:
+        """Return True if the topic is an active UAV camera image topic."""
+        if 'sensor_msgs/msg/Image' not in types:
+            return False
+        parts = topic.split('/')
+        # Expect at least /uav<N>/<camera>/.../image_raw
+        if len(parts) < 3:
+            return False
+        if not parts[1].startswith('uav'):
+            return False
+        if 'image_raw' not in parts:
+            return False
+        return True
+
+    def _discover_cameras(self) -> None:
+        """Scan all published topics and subscribe to any new camera topics."""
+        topic_list = self.get_topic_names_and_types()
+        for topic, types in topic_list:
+            if not self._is_camera_topic(topic, types):
+                continue
+            with self._subs_lock:
+                if topic in self._subscribed_topics:
+                    continue
+                self._subscribed_topics.add(topic)
+
+            sub = self.create_subscription(
+                Image,
+                topic,
+                lambda msg, t=topic: self._image_callback(msg, t),
+                10,
+            )
+            self._subscriptions.append(sub)
+            self.get_logger().info(f'Subscribed to camera topic: {topic}')
 
     def _image_callback(self, msg: Image, topic: str) -> None:
         try:
