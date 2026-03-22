@@ -121,7 +121,8 @@ private:
       initialized_ = true;
 
       RCLCPP_INFO(this->get_logger(), "✓ Altitude inicial: %.2f m", z_);
-      RCLCPP_INFO(this->get_logger(), "🛬 Iniciando descida...");
+      RCLCPP_INFO(this->get_logger(), "🛬 Iniciando descida a %.1f m/s (%.2f m/ciclo × 20 Hz)...",
+        descent_speed_ * 20.0, descent_speed_);
     }
 
     if (!initialized_)
@@ -259,7 +260,7 @@ private:
   int cycle_count_{0};
 
   // Parâmetros
-  double descent_speed_{0.03};    // ✅ AUMENTADO: 3cm/ciclo = 1.5m/s (mais rápido)
+  double descent_speed_{0.08};    // 8cm/ciclo × 20 ciclos/s = 1.6 m/s
 
   rclcpp::Time landed_time_;
 };
