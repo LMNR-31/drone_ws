@@ -13,6 +13,16 @@ class DroneSoftLand : public rclcpp::Node
 public:
   DroneSoftLand() : Node("drone_soft_land")
   {
+    // Declarar parâmetros configuráveis
+    this->declare_parameter("descent_speed", 0.03);
+    this->declare_parameter("horizontal_speed", 0.2);
+
+    descent_speed_ = this->get_parameter("descent_speed").as_double();
+    horizontal_speed_ = this->get_parameter("horizontal_speed").as_double();
+
+    RCLCPP_INFO(this->get_logger(), "⚙️  Parâmetros: descent_speed=%.3f m/ciclo, horizontal_speed=%.2f m/ciclo",
+      descent_speed_, horizontal_speed_);
+
     state_sub_ = this->create_subscription<mavros_msgs::msg::State>(
       "/uav1/mavros/state", 10,
       std::bind(&DroneSoftLand::stateCb, this, std::placeholders::_1));
@@ -137,12 +147,11 @@ private:
       double dy = target_y_ - y_;
       double dist_xy = std::sqrt(dx * dx + dy * dy);
 
-      const double horizontal_speed = 0.2;       // m/ciclo
       const double xy_tolerance = 0.3;           // m - tolerância para considerar chegada ao ponto XY
       const double min_dist_threshold = 0.01;    // m - evita divisão por zero
 
       if (dist_xy > xy_tolerance) {
-        double ratio = std::min(1.0, horizontal_speed / std::max(dist_xy, min_dist_threshold));
+        double ratio = std::min(1.0, horizontal_speed_ / std::max(dist_xy, min_dist_threshold));
         target_.position.x = x_ + dx * ratio;
         target_.position.y = y_ + dy * ratio;
 
@@ -259,7 +268,8 @@ private:
   int cycle_count_{0};
 
   // Parâmetros
-  double descent_speed_{0.03};    // ✅ AUMENTADO: 3cm/ciclo = 1.5m/s (mais rápido)
+  double descent_speed_{0.03};    // m/ciclo (configurável via parâmetro ROS2)
+  double horizontal_speed_{0.2};  // m/ciclo (configurável via parâmetro ROS2)
 
   rclcpp::Time landed_time_;
 };

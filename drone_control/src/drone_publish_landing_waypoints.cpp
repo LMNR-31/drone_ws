@@ -3,6 +3,7 @@
 #include <geometry_msgs/msg/pose_array.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <cmath>
 #include <thread>
 #include <chrono>
 
@@ -13,6 +14,16 @@ class DronePublishLandingWaypoints : public rclcpp::Node
 public:
   DronePublishLandingWaypoints() : Node("drone_publish_landing_waypoints")
   {
+    // Declarar parâmetros configuráveis
+    this->declare_parameter("landing_speed", 1.0);
+    this->declare_parameter("max_wait_cycles", 300);
+
+    landing_speed_ = this->get_parameter("landing_speed").as_double();
+    max_wait_cycles_ = this->get_parameter("max_wait_cycles").as_int();
+
+    RCLCPP_INFO(this->get_logger(), "⚙️  Parâmetros: landing_speed=%.2f, max_wait_cycles=%d",
+      landing_speed_, max_wait_cycles_);
+
     waypoints_pub_ = this->create_publisher<geometry_msgs::msg::PoseArray>("/waypoints", 10);
 
     pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
@@ -60,8 +71,7 @@ public:
     if (pose_received_) {
       rclcpp::Rate wait_rate(10);
       int land_timeout = 0;
-      const int max_wait_cycles = 300; // 30 segundos máximo
-      while (current_pose_.pose.position.z > 0.5 && land_timeout < max_wait_cycles) {
+      while (current_pose_.pose.position.z > 0.5 && land_timeout < max_wait_cycles_) {
         rclcpp::spin_some(this->get_node_base_interface());
         wait_rate.sleep();
         land_timeout++;
@@ -96,14 +106,18 @@ private:
     double landing_z = 0.05;
     double delta_z = current_z - landing_z;
 
-    // ✅ Descida em 5 waypoints (0%, 25%, 50%, 75%, 100%)
-    for (int i = 0; i <= 4; i++) {
+    // Número de waypoints: landing_speed maior → menos waypoints (descida mais rápida)
+    // landing_speed=1.0 → 5 waypoints (comportamento padrão)
+    // landing_speed=2.0 → 3 waypoints (descida mais rápida)
+    int num_waypoints = std::max(2, static_cast<int>(std::round(5.0 / std::max(landing_speed_, 0.1))));
+
+    for (int i = 0; i < num_waypoints; i++) {
       auto pose = geometry_msgs::msg::Pose();
       pose.position.x = current_pose_.pose.position.x;
       pose.position.y = current_pose_.pose.position.y;
 
       // Descida linear: começa em current_z, termina em 0.05
-      double progress = static_cast<double>(i) / 4.0;  // 0.0 → 1.0
+      double progress = static_cast<double>(i) / static_cast<double>(num_waypoints - 1);
       pose.position.z = current_z - (delta_z * progress);
 
       pose.orientation.w = 1.0;
@@ -118,8 +132,8 @@ private:
       current_pose_.pose.position.x,
       current_pose_.pose.position.y);
     RCLCPP_INFO(this->get_logger(),
-      "   Descida: %.2f m → 0.05 m (5 waypoints)",
-      current_z);
+      "   Descida: %.2f m → 0.05 m (%d waypoints, landing_speed=%.2f)",
+      current_z, num_waypoints, landing_speed_);
 
     for (size_t i = 0; i < msg.poses.size(); i++) {
       RCLCPP_INFO(this->get_logger(),
@@ -140,6 +154,8 @@ private:
     return p;
   }();
   bool pose_received_ = false;
+  double landing_speed_{1.0};
+  int max_wait_cycles_{300};
 };
 
 int main(int argc, char **argv)

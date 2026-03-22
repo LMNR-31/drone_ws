@@ -2,15 +2,23 @@ from launch import LaunchDescription
 from launch_ros.actions import Node
 from launch.actions import RegisterEventHandler, TimerAction
 from launch.event_handlers import OnProcessExit
+from ament_index_python.packages import get_package_share_directory
+import os
 
 
 def generate_launch_description():
+    config = os.path.join(
+        get_package_share_directory('drone_control'),
+        'config',
+        'landing_params.yaml'
+    )
 
     soft_land = Node(
         package='drone_control',
         executable='drone_soft_land',
         name='drone_soft_land',
-        output='screen'
+        output='screen',
+        parameters=[config]
     )
 
     activator = Node(

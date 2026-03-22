@@ -1,0 +1,26 @@
+# Parâmetros de pouso configuráveis para o drone
+# Permite ajustar velocidades sem necessidade de recompilação
+
+drone_soft_land:
+  ros__parameters:
+    # Velocidade de descida vertical (metros por ciclo de controle a 20 Hz)
+    # Padrão: 0.03 m/ciclo ≈ 0.6 m/s
+    # Exemplo: 0.05 m/ciclo ≈ 1.0 m/s (pouso mais rápido)
+    descent_speed: 0.03
+
+    # Velocidade de movimentação horizontal (metros por ciclo de controle a 20 Hz)
+    # Padrão: 0.2 m/ciclo
+    horizontal_speed: 0.2
+
+drone_publish_landing_waypoints:
+  ros__parameters:
+    # Multiplicador de velocidade de pouso (controla o número de waypoints intermediários)
+    # Padrão: 1.0 → 5 waypoints
+    # Valor maior → menos waypoints → passos maiores
+    # Exemplo: 2.0 → 3 waypoints (descida mais rápida)
+    landing_speed: 1.0
+
+    # Timeout máximo (em ciclos a 10 Hz) aguardando confirmação de pouso
+    # Padrão: 300 ciclos = 30 segundos
+    # Exemplo: 150 ciclos = 15 segundos
+    max_wait_cycles: 300
