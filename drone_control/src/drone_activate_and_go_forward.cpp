@@ -84,6 +84,7 @@ private:
     ACTIVATED,
     PUBLISH_WAYPOINTS,
     VERIFY_TAKEOFF,
+    WAIT_BEFORE_RETRY,
     FINISH
   };
 
@@ -173,6 +174,7 @@ private:
         publishTakeoffWaypoints();
         state_ = StateMachine::PUBLISH_WAYPOINTS;
         publish_time_ = this->now();
+        verify_attempts_ = 0;
       }
       break;
 
@@ -182,7 +184,6 @@ private:
         RCLCPP_INFO(this->get_logger(), "✅ Waypoints de levantamento enviados. Verificando decolagem...\n");
         state_ = StateMachine::VERIFY_TAKEOFF;
         verify_start_time_ = this->now();
-        verify_attempts_ = 0;
       }
       break;
 
@@ -220,11 +221,10 @@ private:
           if (verify_attempts_ < max_verify_attempts_)
           {
             RCLCPP_WARN(this->get_logger(),
-              "⚠️ Decolagem inefetiva, tentando novamente... (%d/%d)",
+              "⚠️ Decolagem inefetiva, aguardando 5s antes de tentar novamente... (%d/%d)",
               verify_attempts_, max_verify_attempts_);
-            publishTakeoffWaypoints();
-            publish_time_ = this->now();
-            state_ = StateMachine::PUBLISH_WAYPOINTS;
+            state_ = StateMachine::WAIT_BEFORE_RETRY;
+            wait_retry_start_time_ = this->now();
           }
           else
           {
@@ -234,6 +234,22 @@ private:
             state_ = StateMachine::FINISH;
           }
         }
+      }
+      break;
+
+    case StateMachine::WAIT_BEFORE_RETRY:
+      if (cycle_count_ % 20 == 0)
+      {
+        auto elapsed = (this->now() - wait_retry_start_time_).seconds();
+        RCLCPP_INFO(this->get_logger(), "⏳ Aguardando antes de retry... (%.0fs/5s)", elapsed);
+      }
+      if ((this->now() - wait_retry_start_time_) > rclcpp::Duration(5s))
+      {
+        RCLCPP_INFO(this->get_logger(), "📡 Retentando decolagem... (%d/%d)",
+          verify_attempts_, max_verify_attempts_);
+        publishTakeoffWaypoints();
+        publish_time_ = this->now();
+        state_ = StateMachine::PUBLISH_WAYPOINTS;
       }
       break;
 
@@ -339,6 +355,7 @@ private:
   static constexpr double altitude_threshold_{0.5};
   static constexpr int max_verify_attempts_{3};
   rclcpp::Time verify_start_time_;
+  rclcpp::Time wait_retry_start_time_;
   int verify_attempts_{0};
 };
 
