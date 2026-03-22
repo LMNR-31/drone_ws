@@ -11,11 +11,6 @@ def generate_launch_description():
         parameters=[{
             'window_width': 1600,
             'window_height': 900,
-            'camera_topics': [
-                '/uav1/bluefox_down/image_raw',
-                '/uav1/bluefox_reverse/image_raw',
-                '/uav1/bluefox_front/image_raw',
-            ],
         }],
     )
 
