@@ -1,3 +1,4 @@
 build/
 install/
 log/
+drone_control/src/__pycache__/
