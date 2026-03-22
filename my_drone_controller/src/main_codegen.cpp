@@ -896,34 +896,35 @@ private:
       // ──────────────────────────────────────────
       // CAMADA 3: PUBLICAR SETPOINT DE DECOLAGEM
       // ──────────────────────────────────────────
-      // Só publica hover_altitude após confirmação do FCU
+      // Publica setpoint de decolagem usando Z do último waypoint recebido
+      double target_altitude = last_waypoint_goal_.pose.position.z;
       pose_msg.pose.position.x = last_waypoint_goal_.pose.position.x;
       pose_msg.pose.position.y = last_waypoint_goal_.pose.position.y;
-      pose_msg.pose.position.z = config_.hover_altitude;
+      pose_msg.pose.position.z = target_altitude;
       pose_pub_->publish(pose_msg);
 
       takeoff_counter_++;
 
       if (takeoff_counter_ == 1) {
-        RCLCPP_INFO(this->get_logger(), "⬆️ Decolando para %.1f metros...", config_.hover_altitude);
+        RCLCPP_INFO(this->get_logger(), "⬆️ Decolando para %.1f metros...", target_altitude);
         RCLCPP_INFO(this->get_logger(), "   Posição: X=%.2f, Y=%.2f, Z=%.1f",
           last_waypoint_goal_.pose.position.x,
           last_waypoint_goal_.pose.position.y,
-          config_.hover_altitude);
+          target_altitude);
       }
 
       // Log de progresso a cada 100 ciclos (1 segundo @ 100 Hz)
       if (takeoff_counter_ % 100 == 0) {
         RCLCPP_INFO(this->get_logger(),
           "📈 Decolando... Z_alvo=%.1fm | Z_real=%.2fm | Tempo=%.1fs",
-          config_.hover_altitude,
+          target_altitude,
           current_z_real_,
           (double)takeoff_counter_ / 100.0);
       }
 
-      // Verifica se drone chegou em hover_altitude usando odometria real.
+      // Verifica se drone chegou na altitude alvo usando odometria real.
       // Margem de hover_altitude_margin abaixo do alvo para segurança.
-      double arrival_threshold = config_.hover_altitude - config_.hover_altitude_margin;
+      double arrival_threshold = target_altitude - config_.hover_altitude_margin;
       if (current_z_real_ >= arrival_threshold) {
         RCLCPP_INFO(this->get_logger(),
           "✅ Decolagem concluída! Altitude = %.2fm\n", current_z_real_);
@@ -939,7 +940,7 @@ private:
           CommandType::HOVER,
           {{"x", std::to_string(last_waypoint_goal_.pose.position.x)},
            {"y", std::to_string(last_waypoint_goal_.pose.position.y)},
-           {"z", std::to_string(config_.hover_altitude)}});
+           {"z", std::to_string(target_altitude)}});
         RCLCPP_INFO(this->get_logger(),
           "📋 [ID=%lu] Comando HOVER enfileirado", *hover_cmd_id_);
         state_voo_ = 2;
@@ -953,16 +954,16 @@ private:
     // ==========================================
     else if (state_voo_ == 2) {
 
-      // Publica setpoint em hover
+      // Publica setpoint em hover usando Z do último waypoint recebido
       pose_msg.pose.position.x = last_waypoint_goal_.pose.position.x;
       pose_msg.pose.position.y = last_waypoint_goal_.pose.position.y;
-      pose_msg.pose.position.z = config_.hover_altitude;
+      pose_msg.pose.position.z = last_waypoint_goal_.pose.position.z;
       pose_pub_->publish(pose_msg);
 
       if (cycle_count_ % 500 == 0) {
         RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 10000,
           "🛸 Em HOVER (%.1fm) | Posição: X=%.2f, Y=%.2f | Aguardando waypoints... Controlador: %s",
-          config_.hover_altitude,
+          last_waypoint_goal_.pose.position.z,
           last_waypoint_goal_.pose.position.x,
           last_waypoint_goal_.pose.position.y,
           controlador_ativo_ ? "ATIVO" : "INATIVO");
