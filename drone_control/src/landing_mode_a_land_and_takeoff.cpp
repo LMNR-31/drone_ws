@@ -45,7 +45,7 @@ public:
     this->declare_parameter<double>("y", 0.0);
     this->declare_parameter<double>("z_land", 0.05);
     this->declare_parameter<double>("z_takeoff", 1.5);
-    this->declare_parameter<double>("wait_seconds", 5.0);
+    this->declare_parameter<double>("wait_seconds", 10.0); // mudar o tempo de repouso
     this->declare_parameter<bool>("use_current_xy", true);
     this->declare_parameter<std::string>("odom_topic", "/uav1/mavros/local_position/odom");
 
@@ -368,7 +368,7 @@ private:
   std::string controller_node_;
   double x_{0.0};
   double y_{0.0};
-  double z_land_{0.05};
+  double z_land_{0.01};
   double z_takeoff_{1.5};
   double wait_seconds_{5.0};
   bool use_current_xy_{true};
