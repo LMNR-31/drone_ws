@@ -9,6 +9,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(rcl_interfaces REQUIRED)
 find_package(mrs_msgs REQUIRED)
 find_package(mavros_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
@@ -59,6 +60,30 @@ ament_target_dependencies(drone_publish_landing_waypoints
 )
 
 install(TARGETS drone_publish_landing_waypoints
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+add_executable(landing_mode_a_land_and_takeoff src/landing_mode_a_land_and_takeoff.cpp)
+
+ament_target_dependencies(landing_mode_a_land_and_takeoff
+  rclcpp
+  geometry_msgs
+  rcl_interfaces
+)
+
+install(TARGETS landing_mode_a_land_and_takeoff
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+add_executable(landing_mode_b_land_and_disarm src/landing_mode_b_land_and_disarm.cpp)
+
+ament_target_dependencies(landing_mode_b_land_and_disarm
+  rclcpp
+  geometry_msgs
+  rcl_interfaces
+)
+
+install(TARGETS landing_mode_b_land_and_disarm
   DESTINATION lib/${PROJECT_NAME}
 )
 
