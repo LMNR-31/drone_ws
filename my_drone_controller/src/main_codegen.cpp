@@ -706,6 +706,13 @@ private:
       land_cmd_id_ = cmd_queue_.enqueue(CommandType::LAND, {{"z", std::to_string(last_z)}});
       RCLCPP_WARN(this->get_logger(),
         "📋 [ID=%lu] Comando LAND enfileirado", *land_cmd_id_);
+      // Salva ponto de ancoragem para Mode A (ground hold durante e após pouso)
+      ground_hold_x_ = msg->poses[0].position.x;
+      ground_hold_y_ = msg->poses[0].position.y;
+      ground_hold_z_ = std::max(0.01, config_.land_z_threshold);
+      RCLCPP_WARN(this->get_logger(),
+        "📍 Ancoragem de pouso definida: X=%.2f, Y=%.2f, Z=%.3f",
+        ground_hold_x_, ground_hold_y_, ground_hold_z_);
       RCLCPP_WARN(this->get_logger(), "🛬 CONTROLADOR DESLIGADO - DEIXANDO drone_soft_land POUSAR\n");
       return;
     }
@@ -884,6 +891,13 @@ private:
       RCLCPP_WARN(this->get_logger(),
         "🛬 [ID=%lu] POUSO DETECTADO! Z = %.2f m - Comando LAND enfileirado",
         *land_cmd_id_, z);
+      // Salva ponto de ancoragem para Mode A (ground hold durante e após pouso)
+      ground_hold_x_ = x;
+      ground_hold_y_ = y;
+      ground_hold_z_ = std::max(0.01, config_.land_z_threshold);
+      RCLCPP_WARN(this->get_logger(),
+        "📍 Ancoragem de pouso definida: X=%.2f, Y=%.2f, Z=%.3f",
+        ground_hold_x_, ground_hold_y_, ground_hold_z_);
       return;
     }
 
@@ -1294,9 +1308,8 @@ private:
               "\n✅ POUSO CONCLUÍDO (MODO A): mantendo OFFBOARD+ARM e segurando no chão.\n"
               "   Drone permanece armado em estado 5 (standby no chão).\n");
 
-            // Salva posição de pouso como ponto de ancoragem
-            ground_hold_x_ = last_waypoint_goal_.pose.position.x;
-            ground_hold_y_ = last_waypoint_goal_.pose.position.y;
+            // ground_hold_x_/y_/z_ já foram definidos no callback de detecção de pouso;
+            // garantir z mínimo seguro como fallback
             ground_hold_z_ = std::max(0.01, config_.land_z_threshold);
 
             // Limpa flags de trajetória/execução mas MANTÉM offboard_activated_ e activation_confirmed_
@@ -1369,7 +1382,19 @@ private:
         }
       }
 
-      return; // NÃO publica nada durante pouso
+      // Modo A: publica setpoint de ancoragem para manter OFFBOARD ativo durante pouso
+      if (landing_mode_ == 0) {
+        pose_msg.pose.position.x = ground_hold_x_;
+        pose_msg.pose.position.y = ground_hold_y_;
+        pose_msg.pose.position.z = ground_hold_z_;
+        pose_msg.pose.orientation.w = 1.0;
+        pose_pub_->publish(pose_msg);
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 3000,
+          "🛬 [MODO A] Publicando setpoint de ancoragem durante pouso: X=%.2f, Y=%.2f, Z=%.3f",
+          ground_hold_x_, ground_hold_y_, ground_hold_z_);
+      }
+      // Modo B: não publica nada durante pouso (comportamento original)
+      return;
     }
 
     // ==========================================
