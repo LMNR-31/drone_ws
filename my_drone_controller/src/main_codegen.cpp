@@ -365,7 +365,12 @@ public:
       "⚙️  landing_mode=%d (%s)", landing_mode_,
       landing_mode_ == 0 ? "Modo A - standby no chão" : "Modo B - DISARM");
 
-    // Callback para atualização dinâmica do parâmetro landing_mode em runtime
+    // enabled: se false, o controle loop não publica setpoints e pausa a FSM
+    this->declare_parameter<bool>("enabled", true);
+    enabled_ = this->get_parameter("enabled").as_bool();
+    RCLCPP_INFO(this->get_logger(), "⚙️  enabled=%s", enabled_ ? "true" : "false");
+
+    // Callback para atualização dinâmica dos parâmetros em runtime
     param_cb_handle_ = this->add_on_set_parameters_callback(
       std::bind(&DroneControllerCompleto::onSetParameters, this, std::placeholders::_1));
 
@@ -487,10 +492,11 @@ private:
   /**
    * @brief Validates and applies dynamic changes to ROS 2 parameters.
    *
-   * Currently handles `landing_mode`:
-   *  - Must be an integer with value 0 (Modo A) or 1 (Modo B).
-   *  - Updates `landing_mode_` atomically under `mutex_`.
-   *  - Rejects invalid types/values with an explanatory reason.
+   * Handles:
+   *  - `landing_mode`: integer 0 (Modo A) or 1 (Modo B).
+   *  - `enabled`: bool; when false the control loop skips publishing and FSM
+   *    state advances, allowing another node (e.g. drone_yaw_360) to take
+   *    full control of the setpoint stream.
    */
   rcl_interfaces::msg::SetParametersResult onSetParameters(
     const std::vector<rclcpp::Parameter> & params)
@@ -518,6 +524,24 @@ private:
           "🔄 landing_mode atualizado: %d → %d (%s)",
           old_val, landing_mode_,
           landing_mode_ == 0 ? "Modo A - standby no chão" : "Modo B - DISARM");
+      } else if (p.get_name() == "enabled") {
+        if (p.get_type() != rclcpp::ParameterType::PARAMETER_BOOL) {
+          result.successful = false;
+          result.reason = "enabled deve ser bool (true ou false)";
+          return result;
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        bool old_val = enabled_;
+        enabled_ = p.as_bool();
+        if (old_val != enabled_) {
+          if (enabled_) {
+            RCLCPP_INFO(this->get_logger(),
+              "✅ enabled atualizado: false → true (publicação de setpoints RETOMADA)");
+          } else {
+            RCLCPP_INFO(this->get_logger(),
+              "🚫 enabled atualizado: true → false (publicação de setpoints PAUSADA)");
+          }
+        }
       }
     }
     return result;
@@ -998,6 +1022,13 @@ private:
     pose_msg.header.frame_id = "map";
 
     cycle_count_++;
+
+    // Quando disabled, não publica setpoints e não avança a FSM
+    if (!enabled_) {
+      RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+        "🚫 Controller desabilitado (enabled=false): setpoints pausados");
+      return;
+    }
 
     // Verificação periódica de timeouts e salvamento de log (a cada ~10 segundos)
     if (cycle_count_ % 1000 == 0) {
@@ -1496,6 +1527,11 @@ private:
   // ── Modo de pouso ──────────────────────────────────────────────────────
   /// 0=Modo A (standby no chão, OFFBOARD+ARMED), 1=Modo B (DISARM, padrão)
   int landing_mode_{1};
+
+  // ── Controle de publicação ─────────────────────────────────────────────
+  /// Quando false, control_loop() não publica setpoints nem avança a FSM.
+  /// Pode ser alterado em runtime via: ros2 param set /drone_controller_completo enabled false
+  bool enabled_{true};
 
   // Ponto de ancoragem no solo usado pelo estado 5 (Modo A)
   double ground_hold_x_{0.0};  ///< X a manter enquanto em standby no chão

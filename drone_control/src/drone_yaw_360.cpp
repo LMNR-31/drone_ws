@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <future>
 
 using namespace std::chrono_literals;
 using std::placeholders::_1;
@@ -30,13 +31,19 @@ public:
     this->declare_parameter<double>("hz", 20.0);
     // ccw: true = anti-horário (counter-clockwise), false = horário (clockwise)
     this->declare_parameter<bool>("ccw", true);
+    // controller_node: nome do nó controlador a pausar/retomar durante o giro
+    this->declare_parameter<std::string>("controller_node", "drone_controller_completo");
+    // auto_disable_controller: se true, pausa o controller antes de girar e o retoma ao terminar
+    this->declare_parameter<bool>("auto_disable_controller", true);
 
-    uav_ns_   = this->get_parameter("uav_ns").as_string();
-    z_hold_   = this->get_parameter("z_hold").as_double();
-    yaw_rate_ = this->get_parameter("yaw_rate").as_double();
-    angle_    = this->get_parameter("angle").as_double();
-    hz_       = this->get_parameter("hz").as_double();
-    ccw_      = this->get_parameter("ccw").as_bool();
+    uav_ns_                  = this->get_parameter("uav_ns").as_string();
+    z_hold_                  = this->get_parameter("z_hold").as_double();
+    yaw_rate_                = this->get_parameter("yaw_rate").as_double();
+    angle_                   = this->get_parameter("angle").as_double();
+    hz_                      = this->get_parameter("hz").as_double();
+    ccw_                     = this->get_parameter("ccw").as_bool();
+    controller_node_         = this->get_parameter("controller_node").as_string();
+    auto_disable_controller_ = this->get_parameter("auto_disable_controller").as_bool();
 
     if (hz_ <= 0.0) {
       throw std::runtime_error("Parâmetro 'hz' precisa ser > 0");
@@ -68,6 +75,9 @@ public:
         "Parâmetros: uav_ns=%s z_hold=%.2f yaw_rate=%.2f rad/s angle=%.2f rad hz=%.1f direção=%s duração=%.1fs",
         uav_ns_.c_str(), z_hold_, yaw_rate_, angle_, hz_, dir_str, duration_);
     }
+    RCLCPP_INFO(this->get_logger(),
+      "Parâmetros: controller_node=%s auto_disable_controller=%s",
+      controller_node_.c_str(), auto_disable_controller_ ? "true" : "false");
 
     // ==========================================
     // PUBLISHERS
@@ -93,6 +103,22 @@ public:
       uav_ns_.c_str(), uav_ns_.c_str());
 
     // ==========================================
+    // CLIENTE DE PARÂMETROS (para pausar/retomar o controller)
+    //
+    // Criado em um CallbackGroup dedicado (MutuallyExclusive) para que, com o
+    // MultiThreadedExecutor, a resposta do serviço possa ser processada num
+    // thread separado enquanto o timer callback aguarda o future (evita deadlock).
+    // ==========================================
+    if (auto_disable_controller_) {
+      param_cb_group_ = this->create_callback_group(
+        rclcpp::CallbackGroupType::MutuallyExclusive);
+      param_client_ = std::make_shared<rclcpp::AsyncParametersClient>(
+        this, controller_node_, rmw_qos_profile_parameters, param_cb_group_);
+      RCLCPP_INFO(this->get_logger(),
+        "✓ AsyncParametersClient criado para nó: %s", controller_node_.c_str());
+    }
+
+    // ==========================================
     // TIMER
     // ==========================================
     state_ = StateMachine::WAIT_FCU;
@@ -104,6 +130,18 @@ public:
 
     RCLCPP_INFO(this->get_logger(), "✓ Timer criado: %.1f Hz", hz_);
     RCLCPP_INFO(this->get_logger(), "\n🔄 Aguardando conexão FCU...");
+  }
+
+  ~DroneYaw360()
+  {
+    // Tenta re-habilitar o controller mesmo em caso de shutdown inesperado (best-effort)
+    if (auto_disable_controller_ && controller_disabled_) {
+      RCLCPP_INFO(this->get_logger(),
+        "🔄 Destrutor: re-habilitando %s (enabled=true) best-effort...", controller_node_.c_str());
+      if (param_client_ && param_client_->service_is_ready()) {
+        param_client_->set_parameters({rclcpp::Parameter("enabled", true)});
+      }
+    }
   }
 
 private:
@@ -132,6 +170,63 @@ private:
 
   // Position only; ignore velocity, acceleration, yaw angle and yaw_rate
   static constexpr uint16_t MASK_POS_ONLY = MASK_POS_YAWRATE | IGNORE_YAW_RATE;
+
+  /**
+   * @brief Set the `enabled` parameter on the remote controller node (blocking).
+   *
+   * Sends a parameter set request via AsyncParametersClient and waits up to
+   * `timeout_s` seconds for the response.  Safe to call from a timer callback
+   * when using MultiThreadedExecutor (the response is processed by a different
+   * executor thread via `param_cb_group_`).
+   *
+   * Best-effort: logs a warning on failure/timeout and always returns.
+   * Safe when the controller node is absent (service not ready → warn + return).
+   *
+   * @param value     New value for `enabled`.
+   * @param timeout_s Max seconds to wait for the service response.
+   */
+  void setControllerEnabled(bool value, double timeout_s = 2.0)
+  {
+    if (!param_client_) {
+      return;
+    }
+    if (!param_client_->service_is_ready()) {
+      RCLCPP_WARN(this->get_logger(),
+        "⚠️  Serviço de parâmetros de '%s' não disponível — continuando sem %s o controller.",
+        controller_node_.c_str(), value ? "re-habilitar" : "desabilitar");
+      return;
+    }
+
+    auto fut = param_client_->set_parameters({rclcpp::Parameter("enabled", value)});
+
+    // Wait for response; safe because the executor can dispatch it on a separate thread
+    auto status = fut.wait_for(std::chrono::duration<double>(timeout_s));
+    if (status != std::future_status::ready) {
+      RCLCPP_WARN(this->get_logger(),
+        "⚠️  Timeout (%.1fs) ao %s controller '%s' — continuando mesmo assim.",
+        timeout_s, value ? "re-habilitar" : "desabilitar", controller_node_.c_str());
+      return;
+    }
+
+    try {
+      auto results = fut.get();
+      if (!results.empty() && results[0].successful) {
+        RCLCPP_INFO(this->get_logger(),
+          "%s controller '%s' (enabled=%s) com sucesso.",
+          value ? "✅ Re-habilitado" : "🚫 Desabilitado",
+          controller_node_.c_str(), value ? "true" : "false");
+      } else {
+        RCLCPP_WARN(this->get_logger(),
+          "⚠️  Falha ao setar enabled=%s em '%s': %s",
+          value ? "true" : "false", controller_node_.c_str(),
+          (!results.empty()) ? results[0].reason.c_str() : "resposta vazia");
+      }
+    } catch (const std::exception & e) {
+      RCLCPP_WARN(this->get_logger(),
+        "⚠️  Exceção ao setar enabled=%s em '%s': %s",
+        value ? "true" : "false", controller_node_.c_str(), e.what());
+    }
+  }
 
   void stateCallback(const mavros_msgs::msg::State::SharedPtr msg)
   {
@@ -206,6 +301,15 @@ private:
             angle_ * 180.0 / M_PI, ccw_ ? "anti-horário (CCW)" : "horário (CW)");
           RCLCPP_INFO(this->get_logger(), "   Hold: X=%.2f Y=%.2f Z=%.2f  yaw_rate=%.3f rad/s  duração=%.1fs",
             hold_x_, hold_y_, hold_z_, yaw_rate_signed_, duration_);
+
+          // Pausa o drone_controller_completo para evitar conflito de setpoints
+          if (auto_disable_controller_) {
+            RCLCPP_INFO(this->get_logger(),
+              "🚫 Pausando '%s' antes do giro (enabled=false)...", controller_node_.c_str());
+            setControllerEnabled(false, /*timeout_s=*/2.0);
+            controller_disabled_ = true;
+          }
+
           start_time_ = this->now();
           state_ = StateMachine::ROTATING;
         } else if ((this->now() - state_time_).seconds() > 2.0) {
@@ -236,6 +340,13 @@ private:
         // Segurança: yaw_rate zero, mantém posição por ~1s antes de encerrar
         publishPositionTarget(hold_x_, hold_y_, hold_z_, 0.0, MASK_POS_YAWRATE);
         if ((this->now() - finish_time_).seconds() >= 1.0) {
+          // Re-habilita o controller antes de encerrar
+          if (auto_disable_controller_ && controller_disabled_) {
+            RCLCPP_INFO(this->get_logger(),
+              "✅ Re-habilitando '%s' após o giro (enabled=true)...", controller_node_.c_str());
+            setControllerEnabled(true, /*timeout_s=*/2.0);
+            controller_disabled_ = false;
+          }
           RCLCPP_INFO(this->get_logger(), "Encerrando nó.");
           rclcpp::shutdown();
         }
@@ -251,6 +362,11 @@ private:
   rclcpp::Subscription<mavros_msgs::msg::State>::SharedPtr state_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
+
+  // Callback group dedicado para o param_client_ (evita deadlock com MultiThreadedExecutor)
+  rclcpp::CallbackGroup::SharedPtr param_cb_group_;
+  // Cliente assíncrono de parâmetros para pausar/retomar o drone_controller_completo
+  rclcpp::AsyncParametersClient::SharedPtr param_client_;
 
   // ==========================================
   // ESTADO
@@ -276,6 +392,13 @@ private:
   double hz_{20.0};
   bool   ccw_{true};
 
+  // Nome do nó controlador a ser pausado durante o giro
+  std::string controller_node_;
+  // Se true, pausa o controller antes do giro e retoma ao terminar
+  bool auto_disable_controller_{true};
+  // Flag para rastrear se o controller foi desabilitado por este nó
+  bool controller_disabled_{false};
+
   // yaw_rate com sinal: positivo = CCW, negativo = CW
   double yaw_rate_signed_{0.8};
 
@@ -296,7 +419,11 @@ private:
 int main(int argc, char **argv)
 {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<DroneYaw360>());
+  // MultiThreadedExecutor: permite que a resposta do serviço de parâmetros
+  // seja processada num thread separado enquanto o timer callback aguarda.
+  rclcpp::executors::MultiThreadedExecutor exec;
+  exec.add_node(std::make_shared<DroneYaw360>());
+  exec.spin();
   rclcpp::shutdown();
   return 0;
 }
