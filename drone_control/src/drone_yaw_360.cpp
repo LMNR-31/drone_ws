@@ -24,7 +24,8 @@ public:
     // PARÂMETROS
     // ==========================================
     this->declare_parameter<std::string>("uav_ns", "/uav1");
-    this->declare_parameter<double>("z_hold", 2.0);
+    // z_hold: altitude de hold durante o giro. -1.0 (default) = usar altitude atual do odometry.
+    this->declare_parameter<double>("z_hold", -1.0);
     this->declare_parameter<double>("yaw_rate", 0.8);
     this->declare_parameter<double>("angle", 2.0 * M_PI);
     this->declare_parameter<double>("hz", 20.0);
@@ -42,8 +43,13 @@ public:
       throw std::runtime_error("Parâmetro 'yaw_rate' não pode ser 0");
     }
 
-    RCLCPP_INFO(this->get_logger(), "Parâmetros: uav_ns=%s z_hold=%.2f yaw_rate=%.2f rad/s angle=%.2f rad hz=%.1f",
-      uav_ns_.c_str(), z_hold_, yaw_rate_, angle_, hz_);
+    if (z_hold_ < 0.0) {
+      RCLCPP_INFO(this->get_logger(), "Parâmetros: uav_ns=%s z_hold=<altitude atual> yaw_rate=%.2f rad/s angle=%.2f rad hz=%.1f",
+        uav_ns_.c_str(), yaw_rate_, angle_, hz_);
+    } else {
+      RCLCPP_INFO(this->get_logger(), "Parâmetros: uav_ns=%s z_hold=%.2f yaw_rate=%.2f rad/s angle=%.2f rad hz=%.1f",
+        uav_ns_.c_str(), z_hold_, yaw_rate_, angle_, hz_);
+    }
 
     // ==========================================
     // PUBLISHERS
@@ -117,14 +123,20 @@ private:
     return out;
   }
 
-  void publishSetpointYaw(double yaw)
+  void publishSetpointYaw(double yaw, bool use_hold = false)
   {
     geometry_msgs::msg::PoseStamped sp;
     sp.header.stamp = this->now();
     sp.header.frame_id = "map";
-    sp.pose.position.x = current_x_;
-    sp.pose.position.y = current_y_;
-    sp.pose.position.z = z_hold_;
+    if (use_hold) {
+      sp.pose.position.x = hold_x_;
+      sp.pose.position.y = hold_y_;
+      sp.pose.position.z = hold_z_;
+    } else {
+      sp.pose.position.x = current_x_;
+      sp.pose.position.y = current_y_;
+      sp.pose.position.z = (z_hold_ >= 0.0) ? z_hold_ : current_z_;
+    }
     sp.pose.orientation = quatFromYaw(yaw);
     setpoint_pub_->publish(sp);
   }
@@ -139,7 +151,7 @@ private:
         geometry_msgs::msg::PoseStamped sp;
         sp.header.stamp = this->now();
         sp.header.frame_id = "map";
-        sp.pose.position.z = z_hold_;
+        sp.pose.position.z = (z_hold_ >= 0.0) ? z_hold_ : current_z_;
         sp.pose.orientation.w = 1.0;
         setpoint_pub_->publish(sp);
 
@@ -156,7 +168,7 @@ private:
         geometry_msgs::msg::PoseStamped sp;
         sp.header.stamp = this->now();
         sp.header.frame_id = "map";
-        sp.pose.position.z = z_hold_;
+        sp.pose.position.z = (z_hold_ >= 0.0) ? z_hold_ : current_z_;
         sp.pose.orientation.w = 1.0;
         setpoint_pub_->publish(sp);
 
@@ -171,10 +183,15 @@ private:
 
       case StateMachine::WAIT_OFFBOARD_AND_ARMED:
       {
-        publishSetpointYaw(0.0);
+        publishSetpointYaw(0.0, false);
 
         if (current_state_.armed && current_state_.mode == "OFFBOARD") {
+          // Congela posição e altitude no momento de iniciar o giro
+          hold_x_ = current_x_;
+          hold_y_ = current_y_;
+          hold_z_ = (z_hold_ >= 0.0) ? z_hold_ : current_z_;
           RCLCPP_INFO(this->get_logger(), "✅ OFFBOARD + ARMED detectado. Iniciando giro 360.");
+          RCLCPP_INFO(this->get_logger(), "   Hold: X=%.2f Y=%.2f Z=%.2f", hold_x_, hold_y_, hold_z_);
           start_yaw_ = 0.0;
           start_time_ = this->now();
           state_ = StateMachine::ROTATING;
@@ -194,12 +211,13 @@ private:
         const double rotated = std::min(std::abs(angle_), std::abs(yaw_rate_) * elapsed);
         const double yaw = start_yaw_ + direction * rotated;
 
-        publishSetpointYaw(yaw);
+        publishSetpointYaw(yaw, true);
 
         if (rotated >= std::abs(angle_) - 1e-3) {
           RCLCPP_INFO(this->get_logger(), "✅ Giro concluído! (%.1f°)",
             angle_ * 180.0 / M_PI);
           finish_yaw_ = yaw;
+          finish_time_ = this->now();
           state_ = StateMachine::FINISH;
         }
         break;
@@ -207,8 +225,12 @@ private:
 
       case StateMachine::FINISH:
       {
-        publishSetpointYaw(finish_yaw_);
-        rclcpp::shutdown();
+        // Mantém último setpoint por ~1s antes de encerrar
+        publishSetpointYaw(finish_yaw_, true);
+        if ((this->now() - finish_time_).seconds() >= 1.0) {
+          RCLCPP_INFO(this->get_logger(), "Encerrando nó.");
+          rclcpp::shutdown();
+        }
         break;
       }
     }
@@ -250,6 +272,12 @@ private:
   // ==========================================
   double start_yaw_{0.0};
   double finish_yaw_{0.0};
+  rclcpp::Time finish_time_{0, 0, RCL_ROS_TIME};
+
+  // Posição e altitude congeladas no início do giro
+  double hold_x_{0.0};
+  double hold_y_{0.0};
+  double hold_z_{0.0};
 };
 
 int main(int argc, char **argv)
