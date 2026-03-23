@@ -15,6 +15,10 @@ def generate_launch_description():
             'angle': 6.283185307179586,  # 2 * pi
             'hz': 20.0,
             'ccw': True,  # True = anti-horário (CCW), False = horário (CW)
+            # Nome do nó controlador a pausar durante o giro (sem barra inicial)
+            'controller_node': 'drone_controller_completo',
+            # Se True, pausa o controller antes do giro e retoma ao terminar
+            'auto_disable_controller': True,
         }],
     )
 
