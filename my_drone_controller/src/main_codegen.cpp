@@ -1670,19 +1670,19 @@ private:
   double current_z_real_;
 
   // Posição NED completa do drone (atualizada por odometria)
-  double current_x_ned_{0.0};
-  double current_y_ned_{0.0};
-  double current_z_ned_{0.0};
+  double current_x_ned_;
+  double current_y_ned_;
+  double current_z_ned_;
 
   // ── Yaw override via tópico /uav1/yaw_override/cmd ────────────────────
-  bool yaw_override_enabled_{false};     ///< true quando override de yaw ativo
-  double yaw_rate_cmd_{0.0};            ///< yaw_rate a injetar (rad/s)
-  double yaw_override_timeout_s_{0.3};  ///< timeout sem cmd para desativar override
-  rclcpp::Time last_yaw_cmd_time_;      ///< timestamp do último cmd de yaw recebido
-  bool hold_valid_{false};              ///< posição de hold capturada e válida?
-  double hold_x_ned_{0.0};             ///< X de hold (NED)
-  double hold_y_ned_{0.0};             ///< Y de hold (NED)
-  double hold_z_ned_{0.0};             ///< Z de hold (NED, valor bruto do odom)
+  bool yaw_override_enabled_;            ///< true quando override de yaw ativo
+  double yaw_rate_cmd_;                  ///< yaw_rate a injetar (rad/s)
+  double yaw_override_timeout_s_;        ///< timeout sem cmd para desativar override
+  rclcpp::Time last_yaw_cmd_time_;       ///< timestamp do último cmd de yaw recebido
+  bool hold_valid_;                      ///< posição de hold capturada e válida?
+  double hold_x_ned_;                    ///< X de hold (NED)
+  double hold_y_ned_;                    ///< Y de hold (NED)
+  double hold_z_ned_;                    ///< Z de hold (NED, valor bruto do odom)
 
   // ── Modo de pouso ──────────────────────────────────────────────────────
   /// 0=Modo A (standby no chão, OFFBOARD+ARMED), 1=Modo B (DISARM, padrão)
