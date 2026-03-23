@@ -49,9 +49,6 @@ ament_target_dependencies(drone_node
   drone_control
 )
 
-rosidl_get_typesupport_target(drone_control_typesupport_target drone_control "rosidl_typesupport_cpp")
-target_link_libraries(drone_node "${drone_control_typesupport_target}")
-
 # =========================================================
 # 2. OUTROS EXECUTÁVEIS (Seus testes antigos)
 # =========================================================
