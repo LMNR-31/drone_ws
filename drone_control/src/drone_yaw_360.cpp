@@ -1,8 +1,7 @@
 #include <rclcpp/rclcpp.hpp>
-#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <mavros_msgs/msg/position_target.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <mavros_msgs/msg/state.hpp>
-#include <tf2/LinearMath/Quaternion.h>
 
 #include <chrono>
 #include <cmath>
@@ -52,27 +51,32 @@ public:
         "Parâmetro 'angle' negativo (%.4f rad) — usando valor absoluto. Direção controlada por 'ccw'.", angle_);
       angle_ = std::abs(angle_);
     }
-    direction_ = ccw_ ? 1.0 : -1.0;
+
+    // yaw_rate com sinal: positivo = CCW, negativo = CW
+    yaw_rate_signed_ = ccw_ ? std::abs(yaw_rate_) : -std::abs(yaw_rate_);
+
+    // Duração do giro baseada em tempo: t = angle / |yaw_rate|
+    duration_ = angle_ / std::abs(yaw_rate_);
 
     const char * dir_str = ccw_ ? "anti-horário (CCW)" : "horário (CW)";
     if (z_hold_ < 0.0) {
       RCLCPP_INFO(this->get_logger(),
-        "Parâmetros: uav_ns=%s z_hold=<altitude atual> yaw_rate=%.2f rad/s angle=%.2f rad hz=%.1f direção=%s",
-        uav_ns_.c_str(), yaw_rate_, angle_, hz_, dir_str);
+        "Parâmetros: uav_ns=%s z_hold=<altitude atual> yaw_rate=%.2f rad/s angle=%.2f rad hz=%.1f direção=%s duração=%.1fs",
+        uav_ns_.c_str(), yaw_rate_, angle_, hz_, dir_str, duration_);
     } else {
       RCLCPP_INFO(this->get_logger(),
-        "Parâmetros: uav_ns=%s z_hold=%.2f yaw_rate=%.2f rad/s angle=%.2f rad hz=%.1f direção=%s",
-        uav_ns_.c_str(), z_hold_, yaw_rate_, angle_, hz_, dir_str);
+        "Parâmetros: uav_ns=%s z_hold=%.2f yaw_rate=%.2f rad/s angle=%.2f rad hz=%.1f direção=%s duração=%.1fs",
+        uav_ns_.c_str(), z_hold_, yaw_rate_, angle_, hz_, dir_str, duration_);
     }
 
     // ==========================================
     // PUBLISHERS
     // ==========================================
-    setpoint_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>(
-      uav_ns_ + "/mavros/setpoint_position/local", 10);
+    setpoint_pub_ = this->create_publisher<mavros_msgs::msg::PositionTarget>(
+      uav_ns_ + "/mavros/setpoint_raw/local", 10);
 
     RCLCPP_INFO(this->get_logger(), "✓ Publisher criado: %s",
-      (uav_ns_ + "/mavros/setpoint_position/local").c_str());
+      (uav_ns_ + "/mavros/setpoint_raw/local").c_str());
 
     // ==========================================
     // SUBSCRIBERS
@@ -112,6 +116,23 @@ private:
     FINISH
   };
 
+  // type_mask bits for PositionTarget (1 = ignore that field)
+  static constexpr uint16_t IGNORE_VX       = (1 << 3);   // 8
+  static constexpr uint16_t IGNORE_VY       = (1 << 4);   // 16
+  static constexpr uint16_t IGNORE_VZ       = (1 << 5);   // 32
+  static constexpr uint16_t IGNORE_AFX      = (1 << 6);   // 64
+  static constexpr uint16_t IGNORE_AFY      = (1 << 7);   // 128
+  static constexpr uint16_t IGNORE_AFZ      = (1 << 8);   // 256
+  static constexpr uint16_t IGNORE_YAW      = (1 << 10);  // 1024
+  static constexpr uint16_t IGNORE_YAW_RATE = (1 << 11);  // 2048
+
+  // Position + yaw_rate; ignore velocity, acceleration, yaw angle
+  static constexpr uint16_t MASK_POS_YAWRATE =
+    IGNORE_VX | IGNORE_VY | IGNORE_VZ | IGNORE_AFX | IGNORE_AFY | IGNORE_AFZ | IGNORE_YAW;
+
+  // Position only; ignore velocity, acceleration, yaw angle and yaw_rate
+  static constexpr uint16_t MASK_POS_ONLY = MASK_POS_YAWRATE | IGNORE_YAW_RATE;
+
   void stateCallback(const mavros_msgs::msg::State::SharedPtr msg)
   {
     current_state_ = *msg;
@@ -125,34 +146,18 @@ private:
     odom_received_ = true;
   }
 
-  static geometry_msgs::msg::Quaternion quatFromYaw(double yaw)
+  void publishPositionTarget(double x, double y, double z, double yaw_rate, uint16_t type_mask)
   {
-    tf2::Quaternion q;
-    q.setRPY(0.0, 0.0, yaw);
-    geometry_msgs::msg::Quaternion out;
-    out.x = q.x();
-    out.y = q.y();
-    out.z = q.z();
-    out.w = q.w();
-    return out;
-  }
-
-  void publishSetpointYaw(double yaw, bool use_hold = false)
-  {
-    geometry_msgs::msg::PoseStamped sp;
-    sp.header.stamp = this->now();
-    sp.header.frame_id = "map";
-    if (use_hold) {
-      sp.pose.position.x = hold_x_;
-      sp.pose.position.y = hold_y_;
-      sp.pose.position.z = hold_z_;
-    } else {
-      sp.pose.position.x = current_x_;
-      sp.pose.position.y = current_y_;
-      sp.pose.position.z = (z_hold_ >= 0.0) ? z_hold_ : current_z_;
-    }
-    sp.pose.orientation = quatFromYaw(yaw);
-    setpoint_pub_->publish(sp);
+    mavros_msgs::msg::PositionTarget pt;
+    pt.header.stamp = this->now();
+    pt.header.frame_id = "map";
+    pt.coordinate_frame = mavros_msgs::msg::PositionTarget::FRAME_LOCAL_NED;
+    pt.type_mask = type_mask;
+    pt.position.x = x;
+    pt.position.y = y;
+    pt.position.z = z;
+    pt.yaw_rate = static_cast<float>(yaw_rate);
+    setpoint_pub_->publish(pt);
   }
 
   void timerCallback()
@@ -162,12 +167,8 @@ private:
       case StateMachine::WAIT_FCU:
       {
         // Publica setpoint neutro para manter stream ativo
-        geometry_msgs::msg::PoseStamped sp;
-        sp.header.stamp = this->now();
-        sp.header.frame_id = "map";
-        sp.pose.position.z = (z_hold_ >= 0.0) ? z_hold_ : current_z_;
-        sp.pose.orientation.w = 1.0;
-        setpoint_pub_->publish(sp);
+        const double z = (z_hold_ >= 0.0) ? z_hold_ : current_z_;
+        publishPositionTarget(0.0, 0.0, z, 0.0, MASK_POS_ONLY);
 
         if (current_state_.connected) {
           RCLCPP_INFO(this->get_logger(), "✓ FCU conectada!");
@@ -179,12 +180,8 @@ private:
 
       case StateMachine::WAIT_ODOM:
       {
-        geometry_msgs::msg::PoseStamped sp;
-        sp.header.stamp = this->now();
-        sp.header.frame_id = "map";
-        sp.pose.position.z = (z_hold_ >= 0.0) ? z_hold_ : current_z_;
-        sp.pose.orientation.w = 1.0;
-        setpoint_pub_->publish(sp);
+        const double z = (z_hold_ >= 0.0) ? z_hold_ : current_z_;
+        publishPositionTarget(0.0, 0.0, z, 0.0, MASK_POS_ONLY);
 
         if (odom_received_) {
           RCLCPP_INFO(this->get_logger(), "✓ Odom recebida: X=%.2f Y=%.2f Z=%.2f",
@@ -197,17 +194,18 @@ private:
 
       case StateMachine::WAIT_OFFBOARD_AND_ARMED:
       {
-        publishSetpointYaw(0.0, false);
+        const double z = (z_hold_ >= 0.0) ? z_hold_ : current_z_;
+        publishPositionTarget(current_x_, current_y_, z, 0.0, MASK_POS_ONLY);
 
         if (current_state_.armed && current_state_.mode == "OFFBOARD") {
           // Congela posição e altitude no momento de iniciar o giro
           hold_x_ = current_x_;
           hold_y_ = current_y_;
           hold_z_ = (z_hold_ >= 0.0) ? z_hold_ : current_z_;
-          RCLCPP_INFO(this->get_logger(), "✅ OFFBOARD + ARMED detectado. Iniciando giro 360° %s.",
-            ccw_ ? "anti-horário (CCW)" : "horário (CW)");
-          RCLCPP_INFO(this->get_logger(), "   Hold: X=%.2f Y=%.2f Z=%.2f", hold_x_, hold_y_, hold_z_);
-          start_yaw_ = 0.0;
+          RCLCPP_INFO(this->get_logger(), "✅ OFFBOARD + ARMED detectado. Iniciando giro %.1f° %s.",
+            angle_ * 180.0 / M_PI, ccw_ ? "anti-horário (CCW)" : "horário (CW)");
+          RCLCPP_INFO(this->get_logger(), "   Hold: X=%.2f Y=%.2f Z=%.2f  yaw_rate=%.3f rad/s  duração=%.1fs",
+            hold_x_, hold_y_, hold_z_, yaw_rate_signed_, duration_);
           start_time_ = this->now();
           state_ = StateMachine::ROTATING;
         } else if ((this->now() - state_time_).seconds() > 2.0) {
@@ -221,16 +219,12 @@ private:
 
       case StateMachine::ROTATING:
       {
+        publishPositionTarget(hold_x_, hold_y_, hold_z_, yaw_rate_signed_, MASK_POS_YAWRATE);
+
         const double elapsed = (this->now() - start_time_).seconds();
-        const double rotated = std::min(angle_, std::abs(yaw_rate_) * elapsed);
-        const double yaw = start_yaw_ + direction_ * rotated;
-
-        publishSetpointYaw(yaw, true);
-
-        if (rotated >= angle_ - 1e-3) {
-          RCLCPP_INFO(this->get_logger(), "✅ Giro concluído! (%.1f° %s)",
-            angle_ * 180.0 / M_PI, ccw_ ? "CCW" : "CW");
-          finish_yaw_ = yaw;
+        if (elapsed >= duration_) {
+          RCLCPP_INFO(this->get_logger(), "✅ Giro concluído! (%.1f° %s em %.2fs)",
+            angle_ * 180.0 / M_PI, ccw_ ? "CCW" : "CW", elapsed);
           finish_time_ = this->now();
           state_ = StateMachine::FINISH;
         }
@@ -239,8 +233,8 @@ private:
 
       case StateMachine::FINISH:
       {
-        // Mantém último setpoint por ~1s antes de encerrar
-        publishSetpointYaw(finish_yaw_, true);
+        // Segurança: yaw_rate zero, mantém posição por ~1s antes de encerrar
+        publishPositionTarget(hold_x_, hold_y_, hold_z_, 0.0, MASK_POS_YAWRATE);
         if ((this->now() - finish_time_).seconds() >= 1.0) {
           RCLCPP_INFO(this->get_logger(), "Encerrando nó.");
           rclcpp::shutdown();
@@ -253,7 +247,7 @@ private:
   // ==========================================
   // PUBLISHERS / SUBSCRIBERS / TIMER
   // ==========================================
-  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr setpoint_pub_;
+  rclcpp::Publisher<mavros_msgs::msg::PositionTarget>::SharedPtr setpoint_pub_;
   rclcpp::Subscription<mavros_msgs::msg::State>::SharedPtr state_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
@@ -276,20 +270,21 @@ private:
   // PARÂMETROS
   // ==========================================
   std::string uav_ns_;
-  double z_hold_{2.0};
+  double z_hold_{-1.0};
   double yaw_rate_{0.8};
   double angle_{2.0 * M_PI};
   double hz_{20.0};
   bool   ccw_{true};
 
-  // Direção calculada a partir de ccw_: +1.0 (CCW) ou -1.0 (CW)
-  double direction_{1.0};
+  // yaw_rate com sinal: positivo = CCW, negativo = CW
+  double yaw_rate_signed_{0.8};
+
+  // Duração do giro em segundos
+  double duration_{0.0};
 
   // ==========================================
   // ROTAÇÃO
   // ==========================================
-  double start_yaw_{0.0};
-  double finish_yaw_{0.0};
   rclcpp::Time finish_time_{0, 0, RCL_ROS_TIME};
 
   // Posição e altitude congeladas no início do giro
