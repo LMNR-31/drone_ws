@@ -5,7 +5,9 @@
 #include "mavros_msgs/srv/set_mode.hpp"
 #include "mavros_msgs/srv/command_bool.hpp"
 #include "mavros_msgs/msg/state.hpp"
+#include "mavros_msgs/msg/position_target.hpp"
 #include "rcl_interfaces/msg/set_parameters_result.hpp"
+#include "drone_control/msg/yaw_override.hpp"
 #include "drone_config.h"
 #include <vector>
 #include <cmath>
@@ -320,6 +322,24 @@ bool validate_pose(const geometry_msgs::msg::Pose & pose,
  */
 class DroneControllerCompleto : public rclcpp::Node {
 public:
+
+  // type_mask bits for PositionTarget (1 = ignore that field)
+  static constexpr uint16_t IGNORE_VX       = (1 << 3);
+  static constexpr uint16_t IGNORE_VY       = (1 << 4);
+  static constexpr uint16_t IGNORE_VZ       = (1 << 5);
+  static constexpr uint16_t IGNORE_AFX      = (1 << 6);
+  static constexpr uint16_t IGNORE_AFY      = (1 << 7);
+  static constexpr uint16_t IGNORE_AFZ      = (1 << 8);
+  static constexpr uint16_t IGNORE_YAW      = (1 << 10);
+  static constexpr uint16_t IGNORE_YAW_RATE = (1 << 11);
+
+  // Position + yaw_rate; ignore velocity, acceleration, yaw angle
+  static constexpr uint16_t MASK_POS_YAWRATE =
+    IGNORE_VX | IGNORE_VY | IGNORE_VZ | IGNORE_AFX | IGNORE_AFY | IGNORE_AFZ | IGNORE_YAW;
+
+  // Position only; ignore velocity, acceleration, yaw angle and yaw_rate
+  static constexpr uint16_t MASK_POS_ONLY = MASK_POS_YAWRATE | IGNORE_YAW_RATE;
+
   DroneControllerCompleto() : Node("drone_controller_completo") {
     RCLCPP_INFO(this->get_logger(), "\n");
     RCLCPP_INFO(this->get_logger(), "╔════════════════════════════════════════════════════════════╗");
@@ -370,10 +390,10 @@ public:
     enabled_ = this->get_parameter("enabled").as_bool();
     RCLCPP_INFO(this->get_logger(), "⚙️  enabled=%s", enabled_ ? "true" : "false");
 
-    // override_active: quando true, um nó externo (ex: drone_yaw_360) está no
-    // controle do setpoint stream.  O control_loop congela a FSM e para de
-    // publicar setpoints sem "desligar" o controller (semântica de override).
-    // Alternar via: ros2 param set /drone_controller_completo override_active true
+    // override_active: quando true, um nó externo (ex: drone_yaw_360) está
+    // sinalizando override.  O control_loop congela a FSM mas CONTINUA
+    // publicando hold setpoints (posição atual do odom) para manter OFFBOARD
+    // ativo.  Alternar via: ros2 param set /drone_controller_completo override_active true
     this->declare_parameter<bool>("override_active", false);
     override_active_ = this->get_parameter("override_active").as_bool();
     RCLCPP_INFO(this->get_logger(), "⚙️  override_active=%s", override_active_ ? "true" : "false");
@@ -394,10 +414,10 @@ public:
     // ==========================================
     // PUBLISHERS
     // ==========================================
-    pose_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>(
-      "/uav1/mavros/setpoint_position/local", 10);
+    raw_pub_ = this->create_publisher<mavros_msgs::msg::PositionTarget>(
+      "/uav1/mavros/setpoint_raw/local", 10);
 
-    RCLCPP_INFO(this->get_logger(), "✓ Publisher criado: /uav1/mavros/setpoint_position/local");
+    RCLCPP_INFO(this->get_logger(), "✓ Publisher criado: /uav1/mavros/setpoint_raw/local");
 
     // ==========================================
     // SUBSCRIBERS
@@ -422,7 +442,11 @@ public:
       "/uav1/mavros/local_position/odom", 10,
       std::bind(&DroneControllerCompleto::odometry_callback, this, std::placeholders::_1));
 
-    RCLCPP_INFO(this->get_logger(), "✓ Subscribers criados: /uav1/mavros/state, /waypoints, /waypoint_goal e odometria");
+    yaw_override_sub_ = this->create_subscription<drone_control::msg::YawOverride>(
+      "/uav1/yaw_override/cmd", 10,
+      std::bind(&DroneControllerCompleto::yaw_override_callback, this, std::placeholders::_1));
+
+    RCLCPP_INFO(this->get_logger(), "✓ Subscribers criados: /uav1/mavros/state, /waypoints, /waypoint_goal, odometria e /uav1/yaw_override/cmd");
 
     // ==========================================
     // SERVICE CLIENTS - ATIVAÇÃO
@@ -481,6 +505,17 @@ public:
     current_waypoint_idx_ = 0;
     waypoint_duration_ = config_.waypoint_duration;
     current_z_real_ = 0.0;
+    current_x_ned_ = 0.0;
+    current_y_ned_ = 0.0;
+    current_z_ned_ = 0.0;
+    yaw_override_enabled_ = false;
+    yaw_rate_cmd_ = 0.0;
+    yaw_override_timeout_s_ = 0.3;
+    hold_valid_ = false;
+    hold_x_ned_ = 0.0;
+    hold_y_ned_ = 0.0;
+    hold_z_ned_ = 0.0;
+    last_yaw_cmd_time_ = this->now();
     ground_hold_x_ = 0.0;
     ground_hold_y_ = 0.0;
     ground_hold_z_ = std::max(0.01, config_.land_z_threshold);
@@ -505,11 +540,10 @@ private:
    *  - `enabled`: bool; when false the control loop skips publishing and FSM
    *    state advances, allowing another node (e.g. drone_yaw_360) to take
    *    full control of the setpoint stream.
-   *  - `override_active`: bool; when true an external node has taken over the
-   *    setpoint stream (external override mode).  The FSM is frozen and no
-   *    setpoints are published until the parameter returns to false.  Unlike
-   *    `enabled`, the controller node keeps running and will seamlessly resume
-   *    normal operation as soon as `override_active` is cleared.
+   *  - `override_active`: bool; when true an external node has requested FSM
+   *    freeze.  The controller CONTINUES publishing hold setpoints (at current
+   *    odom position) to keep OFFBOARD alive.  Unlike `enabled`, the setpoint
+   *    stream is never dropped.
    */
   rcl_interfaces::msg::SetParametersResult onSetParameters(
     const std::vector<rclcpp::Parameter> & params)
@@ -566,8 +600,14 @@ private:
         override_active_ = p.as_bool();
         if (old_val != override_active_) {
           if (override_active_) {
+            // Capture hold position from current odom NED on activation
+            hold_x_ned_ = current_x_ned_;
+            hold_y_ned_ = current_y_ned_;
+            hold_z_ned_ = current_z_ned_;
+            hold_valid_ = true;
             RCLCPP_INFO(this->get_logger(),
-              "🔒 override_active: false → true (override externo ATIVO: FSM congelada, setpoints pausados)");
+              "🔒 override_active: false → true (override externo ATIVO: FSM congelada, publicando hold setpoint X=%.2f Y=%.2f Z=%.2f)",
+              hold_x_ned_, hold_y_ned_, hold_z_ned_);
           } else {
             RCLCPP_INFO(this->get_logger(),
               "🔓 override_active: true → false (override externo DESATIVADO: operação normal RETOMADA)");
@@ -718,7 +758,41 @@ private:
     // /uav1/mavros/local_position/odom usa NED (North-East-Down).
     // Z negativo em NED = altura; usamos o valor absoluto para ter
     // a altitude sempre positiva (0 no solo, ~hover_altitude em hover).
-    current_z_real_ = std::abs(msg->pose.pose.position.z);
+    current_x_ned_ = msg->pose.pose.position.x;
+    current_y_ned_ = msg->pose.pose.position.y;
+    current_z_ned_ = msg->pose.pose.position.z;
+    current_z_real_ = std::abs(current_z_ned_);
+  }
+
+  // ==========================================
+  // CALLBACK: YAW OVERRIDE COMMAND
+  // ==========================================
+  void yaw_override_callback(const drone_control::msg::YawOverride::SharedPtr msg) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (msg->enable) {
+      // On false->true transition: capture hold position from current odom NED
+      if (!yaw_override_enabled_) {
+        hold_x_ned_ = current_x_ned_;
+        hold_y_ned_ = current_y_ned_;
+        hold_z_ned_ = current_z_ned_;
+        hold_valid_ = true;
+        RCLCPP_INFO(this->get_logger(),
+          "🔒 Yaw override ATIVADO: hold X=%.2f Y=%.2f Z=%.2f (NED), yaw_rate=%.3f rad/s",
+          hold_x_ned_, hold_y_ned_, hold_z_ned_, static_cast<double>(msg->yaw_rate));
+      }
+      yaw_override_enabled_ = true;
+      yaw_rate_cmd_ = static_cast<double>(msg->yaw_rate);
+      if (msg->timeout > 0.0f) {
+        yaw_override_timeout_s_ = static_cast<double>(msg->timeout);
+      }
+    } else {
+      if (yaw_override_enabled_) {
+        RCLCPP_INFO(this->get_logger(), "🔓 Yaw override DESATIVADO: retomando operação normal da FSM.");
+      }
+      yaw_override_enabled_ = false;
+      yaw_rate_cmd_ = 0.0;
+    }
+    last_yaw_cmd_time_ = this->now();
   }
 
   // ==========================================
@@ -1043,14 +1117,26 @@ private:
   }
 
   // ==========================================
+  // HELPER: PUBLICAR POSITION TARGET
+  // ==========================================
+  void publishPositionTarget(double x, double y, double z, double yaw_rate, uint16_t type_mask) {
+    mavros_msgs::msg::PositionTarget pt;
+    pt.header.stamp = this->now();
+    pt.header.frame_id = "map";
+    pt.coordinate_frame = mavros_msgs::msg::PositionTarget::FRAME_LOCAL_NED;
+    pt.type_mask = type_mask;
+    pt.position.x = static_cast<float>(x);
+    pt.position.y = static_cast<float>(y);
+    pt.position.z = static_cast<float>(z);
+    pt.yaw_rate = static_cast<float>(yaw_rate);
+    raw_pub_->publish(pt);
+  }
+
+  // ==========================================
   // LOOP PRINCIPAL DE CONTROLE
   // ==========================================
   void control_loop() {
     std::lock_guard<std::mutex> lock(mutex_);
-
-    auto pose_msg = geometry_msgs::msg::PoseStamped();
-    pose_msg.header.stamp = this->now();
-    pose_msg.header.frame_id = "map";
 
     cycle_count_++;
 
@@ -1061,11 +1147,36 @@ private:
       return;
     }
 
-    // Override externo ativo: FSM congelada, setpoints pausados até que o nó
-    // externo (ex: drone_yaw_360) libere o controle (override_active=false).
-    if (override_active_) {
+    // ── Watchdog: yaw override timeout ─────────────────────────────────────
+    if (yaw_override_enabled_) {
+      double since_last = (this->now() - last_yaw_cmd_time_).seconds();
+      if (since_last > yaw_override_timeout_s_) {
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+          "⚠️ Yaw override timeout (%.2fs sem cmd): desativando override e zerando yaw_rate.", since_last);
+        yaw_override_enabled_ = false;
+        yaw_rate_cmd_ = 0.0;
+      }
+    }
+
+    // ── Yaw override ativo: FSM congelada, publica hold + yaw_rate ─────────
+    if (yaw_override_enabled_ && hold_valid_) {
+      publishPositionTarget(hold_x_ned_, hold_y_ned_, hold_z_ned_, yaw_rate_cmd_, MASK_POS_YAWRATE);
       RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
-        "🔒 Override externo ativo (override_active=true): FSM congelada, setpoints pausados");
+        "🔒 Yaw override ativo: hold X=%.2f Y=%.2f Z=%.2f  yaw_rate=%.3f rad/s",
+        hold_x_ned_, hold_y_ned_, hold_z_ned_, yaw_rate_cmd_);
+      return;  // FSM congelada enquanto override ativo
+    }
+
+    // Override externo ativo (via parâmetro): FSM congelada, mas continua publicando
+    // setpoint de hold para manter OFFBOARD ativo.
+    if (override_active_) {
+      if (hold_valid_) {
+        publishPositionTarget(hold_x_ned_, hold_y_ned_, hold_z_ned_, 0.0, MASK_POS_ONLY);
+      } else {
+        publishPositionTarget(current_x_ned_, current_y_ned_, current_z_ned_, 0.0, MASK_POS_ONLY);
+      }
+      RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+        "🔒 Override externo ativo (override_active=true): FSM congelada, publicando hold setpoint");
       return;
     }
 
@@ -1144,10 +1255,11 @@ private:
       // ──────────────────────────────────────────
       // Publica setpoint de decolagem usando Z do último waypoint recebido
       double target_altitude = last_waypoint_goal_.pose.position.z;
-      pose_msg.pose.position.x = last_waypoint_goal_.pose.position.x;
-      pose_msg.pose.position.y = last_waypoint_goal_.pose.position.y;
-      pose_msg.pose.position.z = target_altitude;
-      pose_pub_->publish(pose_msg);
+      publishPositionTarget(
+        last_waypoint_goal_.pose.position.x,
+        last_waypoint_goal_.pose.position.y,
+        target_altitude,
+        0.0, MASK_POS_ONLY);
 
       takeoff_counter_++;
 
@@ -1201,10 +1313,11 @@ private:
     else if (state_voo_ == 2) {
 
       // Publica setpoint em hover usando Z do último waypoint recebido
-      pose_msg.pose.position.x = last_waypoint_goal_.pose.position.x;
-      pose_msg.pose.position.y = last_waypoint_goal_.pose.position.y;
-      pose_msg.pose.position.z = last_waypoint_goal_.pose.position.z;
-      pose_pub_->publish(pose_msg);
+      publishPositionTarget(
+        last_waypoint_goal_.pose.position.x,
+        last_waypoint_goal_.pose.position.y,
+        last_waypoint_goal_.pose.position.z,
+        0.0, MASK_POS_ONLY);
 
       if (cycle_count_ % 500 == 0) {
         RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 10000,
@@ -1304,11 +1417,11 @@ private:
       // PUBLICAR waypoint ATUAL
       const auto & current_waypoint = trajectory_waypoints_[current_waypoint_idx_];
 
-      pose_msg.pose.position.x = current_waypoint.position.x;
-      pose_msg.pose.position.y = current_waypoint.position.y;
-      pose_msg.pose.position.z = current_waypoint.position.z;
-      pose_msg.pose.orientation.w = 1.0;
-      pose_pub_->publish(pose_msg);
+      publishPositionTarget(
+        current_waypoint.position.x,
+        current_waypoint.position.y,
+        current_waypoint.position.z,
+        0.0, MASK_POS_ONLY);
 
       // LOG: Mostrar progresso da trajetória
       if (cycle_count_ % 500 == 0) {
@@ -1319,9 +1432,9 @@ private:
           "📡 Trajetória em execução | WP[%d/%zu]: X=%.2fm, Y=%.2fm, Z=%.2fm (Z_real=%.2f) | %.1f%% concluído",
           current_waypoint_idx_,
           trajectory_waypoints_.size() - 1,
-          pose_msg.pose.position.x,
-          pose_msg.pose.position.y,
-          pose_msg.pose.position.z,
+          current_waypoint.position.x,
+          current_waypoint.position.y,
+          current_waypoint.position.z,
           current_z_real_,
           progress_pct);
       }
@@ -1454,11 +1567,7 @@ private:
 
       // Modo A: publica setpoint de ancoragem para manter OFFBOARD ativo durante pouso
       if (landing_mode_ == 0) {
-        pose_msg.pose.position.x = ground_hold_x_;
-        pose_msg.pose.position.y = ground_hold_y_;
-        pose_msg.pose.position.z = ground_hold_z_;
-        pose_msg.pose.orientation.w = 1.0;
-        pose_pub_->publish(pose_msg);
+        publishPositionTarget(ground_hold_x_, ground_hold_y_, ground_hold_z_, 0.0, MASK_POS_ONLY);
         RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 3000,
           "🛬 [MODO A] Publicando setpoint de ancoragem durante pouso: X=%.2f, Y=%.2f, Z=%.3f",
           ground_hold_x_, ground_hold_y_, ground_hold_z_);
@@ -1490,11 +1599,7 @@ private:
       }
 
       // Publica setpoint de posição baixa para segurar o drone no solo
-      pose_msg.pose.position.x = ground_hold_x_;
-      pose_msg.pose.position.y = ground_hold_y_;
-      pose_msg.pose.position.z = ground_hold_z_;
-      pose_msg.pose.orientation.w = 1.0;
-      pose_pub_->publish(pose_msg);
+      publishPositionTarget(ground_hold_x_, ground_hold_y_, ground_hold_z_, 0.0, MASK_POS_ONLY);
 
       if (cycle_count_ % 500 == 0) {
         RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 10000,
@@ -1512,13 +1617,14 @@ private:
   DroneConfig config_;
 
   // Publishers
-  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
+  rclcpp::Publisher<mavros_msgs::msg::PositionTarget>::SharedPtr raw_pub_;
 
   // Subscribers
   rclcpp::Subscription<mavros_msgs::msg::State>::SharedPtr state_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr waypoints_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr waypoint_goal_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
+  rclcpp::Subscription<drone_control::msg::YawOverride>::SharedPtr yaw_override_sub_;
 
   // Service Clients - ATIVAÇÃO OFFBOARD + ARM
   rclcpp::Client<mavros_msgs::srv::SetMode>::SharedPtr mode_client_;
@@ -1563,6 +1669,21 @@ private:
   // Posição Z real do drone (atualizada por odometria)
   double current_z_real_;
 
+  // Posição NED completa do drone (atualizada por odometria)
+  double current_x_ned_;
+  double current_y_ned_;
+  double current_z_ned_;
+
+  // ── Yaw override via tópico /uav1/yaw_override/cmd ────────────────────
+  bool yaw_override_enabled_;            ///< true quando override de yaw ativo
+  double yaw_rate_cmd_;                  ///< yaw_rate a injetar (rad/s)
+  double yaw_override_timeout_s_;        ///< timeout sem cmd para desativar override
+  rclcpp::Time last_yaw_cmd_time_;       ///< timestamp do último cmd de yaw recebido
+  bool hold_valid_;                      ///< posição de hold capturada e válida?
+  double hold_x_ned_;                    ///< X de hold (NED)
+  double hold_y_ned_;                    ///< Y de hold (NED)
+  double hold_z_ned_;                    ///< Z de hold (NED, valor bruto do odom)
+
   // ── Modo de pouso ──────────────────────────────────────────────────────
   /// 0=Modo A (standby no chão, OFFBOARD+ARMED), 1=Modo B (DISARM, padrão)
   int landing_mode_{1};
@@ -1573,9 +1694,10 @@ private:
   bool enabled_{true};
 
   // ── Override externo ──────────────────────────────────────────────────
-  /// Quando true, um nó externo (ex: drone_yaw_360) está no controle do
-  /// setpoint stream.  control_loop() congela a FSM e não publica setpoints.
-  /// Alternar via: ros2 param set /drone_controller_completo override_active true
+  /// Quando true, um nó externo (ex: drone_yaw_360) está sinalizando override.
+  /// control_loop() congela a FSM mas CONTINUA publicando hold setpoints para
+  /// manter OFFBOARD ativo. Alternar via:
+  ///   ros2 param set /drone_controller_completo override_active true
   bool override_active_{false};
 
   // Ponto de ancoragem no solo usado pelo estado 5 (Modo A)

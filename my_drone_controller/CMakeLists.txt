@@ -13,6 +13,7 @@ find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(mavros_msgs REQUIRED)
 find_package(rcl_interfaces REQUIRED)
+find_package(drone_control REQUIRED)
 
 # 2. DIRETÓRIOS DE INCLUDE (Deve vir ANTES do add_executable)
 # Adicionei todas as variações que vi na sua árvore de arquivos
@@ -45,7 +46,11 @@ ament_target_dependencies(drone_node
   sensor_msgs
   mavros_msgs
   rcl_interfaces
+  drone_control
 )
+
+rosidl_get_typesupport_target(drone_control_typesupport_target drone_control "rosidl_typesupport_cpp")
+target_link_libraries(drone_node "${drone_control_typesupport_target}")
 
 # =========================================================
 # 2. OUTROS EXECUTÁVEIS (Seus testes antigos)
