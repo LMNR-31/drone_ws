@@ -13,6 +13,7 @@ find_package(rcl_interfaces REQUIRED)
 find_package(mrs_msgs REQUIRED)
 find_package(mavros_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(tf2 REQUIRED)
 
 
 # Adicionar no final do arquivo drone_control/CMakeLists.txt:
@@ -86,6 +87,20 @@ ament_target_dependencies(landing_mode_b_land_and_disarm
 )
 
 install(TARGETS landing_mode_b_land_and_disarm
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+add_executable(drone_yaw_360 src/drone_yaw_360.cpp)
+
+ament_target_dependencies(drone_yaw_360
+  rclcpp
+  geometry_msgs
+  nav_msgs
+  mavros_msgs
+  tf2
+)
+
+install(TARGETS drone_yaw_360
   DESTINATION lib/${PROJECT_NAME}
 )
 
