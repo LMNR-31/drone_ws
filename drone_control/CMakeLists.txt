@@ -106,6 +106,9 @@ ament_target_dependencies(drone_yaw_360
   mavros_msgs
 )
 
+rosidl_target_interfaces(drone_yaw_360
+  ${PROJECT_NAME} "rosidl_typesupport_cpp")
+
 install(TARGETS drone_yaw_360
   DESTINATION lib/${PROJECT_NAME}
 )
