@@ -370,6 +370,14 @@ public:
     enabled_ = this->get_parameter("enabled").as_bool();
     RCLCPP_INFO(this->get_logger(), "⚙️  enabled=%s", enabled_ ? "true" : "false");
 
+    // override_active: quando true, um nó externo (ex: drone_yaw_360) está no
+    // controle do setpoint stream.  O control_loop congela a FSM e para de
+    // publicar setpoints sem "desligar" o controller (semântica de override).
+    // Alternar via: ros2 param set /drone_controller_completo override_active true
+    this->declare_parameter<bool>("override_active", false);
+    override_active_ = this->get_parameter("override_active").as_bool();
+    RCLCPP_INFO(this->get_logger(), "⚙️  override_active=%s", override_active_ ? "true" : "false");
+
     // Callback para atualização dinâmica dos parâmetros em runtime
     param_cb_handle_ = this->add_on_set_parameters_callback(
       std::bind(&DroneControllerCompleto::onSetParameters, this, std::placeholders::_1));
@@ -497,6 +505,11 @@ private:
    *  - `enabled`: bool; when false the control loop skips publishing and FSM
    *    state advances, allowing another node (e.g. drone_yaw_360) to take
    *    full control of the setpoint stream.
+   *  - `override_active`: bool; when true an external node has taken over the
+   *    setpoint stream (external override mode).  The FSM is frozen and no
+   *    setpoints are published until the parameter returns to false.  Unlike
+   *    `enabled`, the controller node keeps running and will seamlessly resume
+   *    normal operation as soon as `override_active` is cleared.
    */
   rcl_interfaces::msg::SetParametersResult onSetParameters(
     const std::vector<rclcpp::Parameter> & params)
@@ -540,6 +553,24 @@ private:
           } else {
             RCLCPP_INFO(this->get_logger(),
               "🚫 enabled atualizado: true → false (publicação de setpoints PAUSADA)");
+          }
+        }
+      } else if (p.get_name() == "override_active") {
+        if (p.get_type() != rclcpp::ParameterType::PARAMETER_BOOL) {
+          result.successful = false;
+          result.reason = "override_active deve ser bool (true ou false)";
+          return result;
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        bool old_val = override_active_;
+        override_active_ = p.as_bool();
+        if (old_val != override_active_) {
+          if (override_active_) {
+            RCLCPP_INFO(this->get_logger(),
+              "🔒 override_active: false → true (override externo ATIVO: FSM congelada, setpoints pausados)");
+          } else {
+            RCLCPP_INFO(this->get_logger(),
+              "🔓 override_active: true → false (override externo DESATIVADO: operação normal RETOMADA)");
           }
         }
       }
@@ -1027,6 +1058,14 @@ private:
     if (!enabled_) {
       RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
         "🚫 Controller desabilitado (enabled=false): setpoints pausados");
+      return;
+    }
+
+    // Override externo ativo: FSM congelada, setpoints pausados até que o nó
+    // externo (ex: drone_yaw_360) libere o controle (override_active=false).
+    if (override_active_) {
+      RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+        "🔒 Override externo ativo (override_active=true): FSM congelada, setpoints pausados");
       return;
     }
 
@@ -1532,6 +1571,12 @@ private:
   /// Quando false, control_loop() não publica setpoints nem avança a FSM.
   /// Pode ser alterado em runtime via: ros2 param set /drone_controller_completo enabled false
   bool enabled_{true};
+
+  // ── Override externo ──────────────────────────────────────────────────
+  /// Quando true, um nó externo (ex: drone_yaw_360) está no controle do
+  /// setpoint stream.  control_loop() congela a FSM e não publica setpoints.
+  /// Alternar via: ros2 param set /drone_controller_completo override_active true
+  bool override_active_{false};
 
   // Ponto de ancoragem no solo usado pelo estado 5 (Modo A)
   double ground_hold_x_{0.0};  ///< X a manter enquanto em standby no chão
