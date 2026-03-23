@@ -295,15 +295,27 @@ bool validate_pose(const geometry_msgs::msg::Pose & pose,
 /**
  * @brief Complete drone controller node with command tracking and safety.
  *
- * Implements a 5-state flight state machine:
+ * Implements a 6-state flight state machine:
  *  - State 0: Waiting for waypoint goal
  *  - State 1: Takeoff (OFFBOARD + ARM, climb to hover_altitude)
  *  - State 2: Hover (waiting for trajectory)
  *  - State 3: Executing trajectory
  *  - State 4: Landing / paused
+ *  - State 5: Standby on ground (Modo A only – OFFBOARD+ARMED, publishing
+ *              low-Z setpoint to hold the drone on the ground without
+ *              disarming; exits to State 1 on new flight waypoint)
  *
  * All drone commands are registered in a CommandQueue so that every
  * operation can be audited and timed out automatically.
+ *
+ * The `landing_mode` ROS 2 parameter selects the end-of-landing behaviour:
+ *  - 0 (Modo A): transition to State 5 – stay OFFBOARD+ARMED on the ground.
+ *  - 1 (Modo B): DISARM and full reset to State 0 (default / current behaviour).
+ *
+ * NOTE: drone_control/src/drone_soft_land.cpp also issues a DISARM after its
+ * own landing sequence.  When landing_mode=0 that node must NOT be running
+ * alongside this controller, otherwise it will disarm the drone and prevent
+ * State 5 from functioning correctly.
  */
 class DroneControllerCompleto : public rclcpp::Node {
 public:
@@ -339,6 +351,18 @@ public:
     config_.activation_timeout    = this->get_parameter("activation_timeout").as_double();
     config_.command_timeout       = this->get_parameter("command_timeout").as_double();
     config_.landing_timeout       = this->get_parameter("landing_timeout").as_double();
+
+    // landing_mode: 0=Modo A (standby no chão, OFFBOARD+ARMED), 1=Modo B (DISARM, padrão)
+    this->declare_parameter<int>("landing_mode", 1);
+    landing_mode_ = this->get_parameter("landing_mode").as_int();
+    if (landing_mode_ != 0 && landing_mode_ != 1) {
+      RCLCPP_WARN(this->get_logger(),
+        "⚠️  landing_mode=%d inválido; usando 1 (DISARM)", landing_mode_);
+      landing_mode_ = 1;
+    }
+    RCLCPP_INFO(this->get_logger(),
+      "⚙️  landing_mode=%d (%s)", landing_mode_,
+      landing_mode_ == 0 ? "Modo A - standby no chão" : "Modo B - DISARM");
 
     RCLCPP_INFO(this->get_logger(), "⚙️  Configuração carregada:");
     RCLCPP_INFO(this->get_logger(), "   hover_altitude=%.2f m  margin=%.3f m",
@@ -439,6 +463,10 @@ public:
     current_waypoint_idx_ = 0;
     waypoint_duration_ = config_.waypoint_duration;
     current_z_real_ = 0.0;
+    ground_hold_x_ = 0.0;
+    ground_hold_y_ = 0.0;
+    ground_hold_z_ = std::max(0.01, config_.land_z_threshold);
+    state5_recovery_time_ = this->now();
 
     RCLCPP_INFO(this->get_logger(), "\n📊 STATUS INICIAL:");
     RCLCPP_INFO(this->get_logger(), "   Estado: %d (aguardando waypoint)", state_voo_);
@@ -618,6 +646,12 @@ private:
     // DETECTA POUSO (Z < land_z_threshold)
     // ==========================================
     if (msg->poses.size() == 1 && last_z < config_.land_z_threshold) {
+      // Se já estiver em standby no chão (estado 5), ignorar comando de pouso
+      if (state_voo_ == 5) {
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+          "ℹ️ Comando de pouso ignorado: drone já em standby no chão (estado 5)");
+        return;
+      }
       RCLCPP_WARN(this->get_logger(), "\n🛬🛬🛬 POUSO DETECTADO! Z_final = %.2f m", last_z);
       pouso_em_andamento_ = true;
       controlador_ativo_ = false;
@@ -656,16 +690,29 @@ private:
       RCLCPP_INFO(this->get_logger(), "   state_voo_=%d", state_voo_);
       RCLCPP_INFO(this->get_logger(), "   activation_confirmed_=%d", activation_confirmed_);
 
-      // Força reativação, independentemente do estado anterior
-      RCLCPP_INFO(this->get_logger(), "🔋 Ativando OFFBOARD+ARM para levantamento...\n");
+      // Se estiver em estado 5 (standby no chão, Modo A) e já OFFBOARD+ARM, não
+      // precisamos resetar as flags nem solicitar ativação novamente.
+      if (state_voo_ == 5 &&
+          current_state_.armed && current_state_.mode == "OFFBOARD") {
+        RCLCPP_INFO(this->get_logger(),
+          "🔋 Estado 5: já OFFBOARD+ARM – reutilizando ativação para levantamento...\n");
+        // offboard_activated_ e activation_confirmed_ já estão ok; não reseta
+      } else {
+        // Força reativação, independentemente do estado anterior
+        RCLCPP_INFO(this->get_logger(), "🔋 Ativando OFFBOARD+ARM para levantamento...\n");
 
-      // Reset explícito ANTES de reativar
-      offboard_activated_ = false;
-      activation_confirmed_ = false;
+        // Reset explícito ANTES de reativar
+        offboard_activated_ = false;
+        activation_confirmed_ = false;
 
-      // Solicita OFFBOARD MODE e ARM
-      request_offboard();
-      request_arm();
+        // Solicita OFFBOARD MODE e ARM
+        request_offboard();
+        request_arm();
+
+        // Marca como ativado e aguarda confirmação do FCU
+        offboard_activated_ = true;
+        activation_time_ = this->now();
+      }
 
       // Enfileira comando de TAKEOFF
       takeoff_cmd_id_ = cmd_queue_.enqueue(
@@ -675,10 +722,6 @@ private:
          {"z", std::to_string(config_.hover_altitude)}});
       RCLCPP_INFO(this->get_logger(),
         "📋 [ID=%lu] Comando TAKEOFF enfileirado", *takeoff_cmd_id_);
-
-      // Marca como ativado e aguarda confirmação do FCU
-      offboard_activated_ = true;
-      activation_time_ = this->now();
 
       // Vai direto para ESTADO 1 (decolagem) aguardando OFFBOARD+ARM confirmados
       state_voo_ = 1;
@@ -698,10 +741,11 @@ private:
     // ==========================================
     if (msg->poses.size() >= 2) {
 
-      // Se pouso em andamento (estado 4), ignora novos waypoints
+      // Se pouso em andamento (estado 4 ou 5), ignora novos waypoints de trajetória
       // para não corromper last_waypoint_goal_
-      if (state_voo_ == 4) {
-        RCLCPP_WARN(this->get_logger(), "⚠️ Ignorando waypoints durante pouso (estado 4)");
+      if (state_voo_ == 4 || state_voo_ == 5) {
+        RCLCPP_WARN(this->get_logger(),
+          "⚠️ Ignorando waypoints de trajetória durante pouso/standby (estado %d)", state_voo_);
         return;
       }
 
@@ -808,6 +852,55 @@ private:
         state_voo_ = 0;
         takeoff_counter_ = 0;
         pouso_em_andamento_ = false;
+      }
+      return;
+    }
+
+    // ESTADO 5: STANDBY NO CHÃO (Modo A)
+    // Aceita waypoints de voo (z >= land_z_threshold) para iniciar novo ciclo
+    if (state_voo_ == 5) {
+      if (z >= config_.land_z_threshold) {
+        RCLCPP_INFO(this->get_logger(),
+          "\n📍 [ESTADO 5] WAYPOINT DE VÔO RECEBIDO: X=%.2f, Y=%.2f, Z=%.2f – saindo do standby\n",
+          x, y, z);
+        last_waypoint_goal_ = *msg;
+        waypoint_goal_received_ = true;
+        pouso_em_andamento_ = false;
+        controlador_ativo_ = false;
+        trajectory_started_ = false;
+        trajectory_waypoints_.clear();
+        current_waypoint_idx_ = 0;
+
+        // Se já estiver OFFBOARD+ARM, reutiliza a ativação
+        if (current_state_.armed && current_state_.mode == "OFFBOARD") {
+          RCLCPP_INFO(this->get_logger(),
+            "🔋 [ESTADO 5] Já OFFBOARD+ARM – iniciando decolagem diretamente...");
+          // offboard_activated_ e activation_confirmed_ já estão ok
+        } else {
+          RCLCPP_INFO(this->get_logger(),
+            "🔋 [ESTADO 5] Reativando OFFBOARD+ARM para decolagem...");
+          offboard_activated_ = false;
+          activation_confirmed_ = false;
+          request_offboard();
+          request_arm();
+          offboard_activated_ = true;
+          activation_time_ = this->now();
+        }
+
+        takeoff_cmd_id_ = cmd_queue_.enqueue(
+          CommandType::TAKEOFF,
+          {{"x", std::to_string(x)},
+           {"y", std::to_string(y)},
+           {"z", std::to_string(config_.hover_altitude)}});
+        RCLCPP_INFO(this->get_logger(),
+          "📋 [ID=%lu] Comando TAKEOFF enfileirado (saída do estado 5)", *takeoff_cmd_id_);
+
+        state_voo_ = 1;
+        takeoff_counter_ = 0;
+      } else {
+        // Waypoint de pouso recebido em estado 5: ignora (já no chão)
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+          "ℹ️ [ESTADO 5] Waypoint de pouso ignorado (drone já no chão)");
       }
       return;
     }
@@ -1135,53 +1228,137 @@ private:
 
         // Se passou landing_timeout segundos desde que pouso foi detectado
         if ((this->now() - pouso_start_time_).seconds() > config_.landing_timeout) {
-          RCLCPP_WARN(this->get_logger(), "🔌 Solicitando DISARM...");
 
-          // DISARM
-          request_disarm();
+          if (landing_mode_ == 0) {
+            // ── MODO A: Standby no chão ──────────────────────────────────
+            // Confirma comando LAND sem desarmar
+            if (land_cmd_id_) {
+              cmd_queue_.confirm(*land_cmd_id_, true);
+              RCLCPP_WARN(this->get_logger(),
+                "✅ [ID=%lu] LAND confirmado (Modo A - sem DISARM)", *land_cmd_id_);
+              land_cmd_id_.reset();
+            }
+            // Salva log persistente do histórico de comandos
+            cmd_queue_.save_log("/tmp/drone_commands.log");
+            RCLCPP_INFO(this->get_logger(),
+              "💾 Histórico de comandos salvo em /tmp/drone_commands.log");
 
-          // Confirma comando LAND
-          if (land_cmd_id_) {
-            cmd_queue_.confirm(*land_cmd_id_, true);
             RCLCPP_WARN(this->get_logger(),
-              "✅ [ID=%lu] LAND confirmado - pouso concluído", *land_cmd_id_);
+              "\n✅ POUSO CONCLUÍDO (MODO A): mantendo OFFBOARD+ARM e segurando no chão.\n"
+              "   Drone permanece armado em estado 5 (standby no chão).\n");
+
+            // Salva posição de pouso como ponto de ancoragem
+            ground_hold_x_ = last_waypoint_goal_.pose.position.x;
+            ground_hold_y_ = last_waypoint_goal_.pose.position.y;
+            ground_hold_z_ = std::max(0.01, config_.land_z_threshold);
+
+            // Limpa flags de trajetória/execução mas MANTÉM offboard_activated_ e activation_confirmed_
+            pouso_em_andamento_ = false;
+            controlador_ativo_ = false;
+            trajectory_started_ = false;
+            pouso_start_time_set_ = false;
+            takeoff_counter_ = 0;
+            trajectory_waypoints_.clear();
+            current_waypoint_idx_ = 0;
+            takeoff_cmd_id_.reset();
+            hover_cmd_id_.reset();
+            trajectory_cmd_id_.reset();
+
+            // Transiciona para estado 5: standby no chão
+            state_voo_ = 5;
+
+            RCLCPP_WARN(this->get_logger(), "🔍 DEBUG MODO A (estado 5):");
+            RCLCPP_WARN(this->get_logger(), "   offboard_activated_=%d (mantido)", offboard_activated_);
+            RCLCPP_WARN(this->get_logger(), "   activation_confirmed_=%d (mantido)", activation_confirmed_);
+            RCLCPP_WARN(this->get_logger(), "   ground_hold=(%.2f, %.2f, %.2f)",
+              ground_hold_x_, ground_hold_y_, ground_hold_z_);
+
+          } else {
+            // ── MODO B: Desligar/Desarmar (comportamento atual) ──────────
+            RCLCPP_WARN(this->get_logger(), "🔌 Solicitando DISARM...");
+
+            // DISARM
+            request_disarm();
+
+            // Confirma comando LAND
+            if (land_cmd_id_) {
+              cmd_queue_.confirm(*land_cmd_id_, true);
+              RCLCPP_WARN(this->get_logger(),
+                "✅ [ID=%lu] LAND confirmado - pouso concluído", *land_cmd_id_);
+              land_cmd_id_.reset();
+            }
+            // Salva log persistente do histórico de comandos
+            cmd_queue_.save_log("/tmp/drone_commands.log");
+            RCLCPP_INFO(this->get_logger(),
+              "💾 Histórico de comandos salvo em /tmp/drone_commands.log");
+
+            RCLCPP_WARN(this->get_logger(),
+              "\n✅ POUSO CONCLUÍDO! Aguardando novo comando de waypoint para decolar novamente...\n");
+
+            // Resetar TODAS as flags para estado limpo
+            // CRUCIAL: offboard_activated_ DEVE ser false para próxima decolagem!
+            state_voo_ = 0;
+            pouso_em_andamento_ = false;
+            controlador_ativo_ = false;
+            trajectory_started_ = false;
+            pouso_start_time_set_ = false;
+            offboard_activated_ = false;
+            activation_confirmed_ = false;
+            takeoff_counter_ = 0;
+            trajectory_waypoints_.clear();
+            current_waypoint_idx_ = 0;
+            takeoff_cmd_id_.reset();
+            hover_cmd_id_.reset();
+            trajectory_cmd_id_.reset();
             land_cmd_id_.reset();
+
+            // Log de verificação
+            RCLCPP_WARN(this->get_logger(), "🔍 DEBUG RESET EM ESTADO 4:");
+            RCLCPP_WARN(this->get_logger(), "   offboard_activated_=%d (deve ser 0)", offboard_activated_);
+            RCLCPP_WARN(this->get_logger(), "   state_voo_=%d (deve ser 0)", state_voo_);
           }
-          // Salva log persistente do histórico de comandos
-          cmd_queue_.save_log("/tmp/drone_commands.log");
-          RCLCPP_INFO(this->get_logger(),
-            "💾 Histórico de comandos salvo em /tmp/drone_commands.log");
-
-          RCLCPP_WARN(this->get_logger(),
-            "\n✅ POUSO CONCLUÍDO! Aguardando novo comando de waypoint para decolar novamente...\n");
-
-          // Resetar TODAS as flags para estado limpo
-          // CRUCIAL: offboard_activated_ DEVE ser false para próxima decolagem!
-          state_voo_ = 0;
-          pouso_em_andamento_ = false;
-          controlador_ativo_ = false;
-          trajectory_started_ = false;
-          pouso_start_time_set_ = false;
-          offboard_activated_ = false;
-          activation_confirmed_ = false;
-          takeoff_counter_ = 0;
-          trajectory_waypoints_.clear();
-          current_waypoint_idx_ = 0;
-          takeoff_cmd_id_.reset();
-          hover_cmd_id_.reset();
-          trajectory_cmd_id_.reset();
-          land_cmd_id_.reset();
-
-          // Log de verificação
-          RCLCPP_WARN(this->get_logger(), "🔍 DEBUG RESET EM ESTADO 4:");
-          RCLCPP_WARN(this->get_logger(), "   offboard_activated_=%d (deve ser 0)", offboard_activated_);
-          RCLCPP_WARN(this->get_logger(), "   state_voo_=%d (deve ser 0)", state_voo_);
 
           return;
         }
       }
 
       return; // NÃO publica nada durante pouso
+    }
+
+    // ==========================================
+    // ESTADO 5: STANDBY NO CHÃO (MODO A)
+    // Mantém OFFBOARD+ARM, publica setpoint de posição com Z baixo
+    // para o PX4 segurar o drone no solo sem desarmar os motores.
+    // Sai deste estado ao receber novo waypoint de voo (Z >= land_z_threshold).
+    // ==========================================
+    else if (state_voo_ == 5) {
+      // Verifica se ainda está armado e em OFFBOARD
+      if (!current_state_.armed || current_state_.mode != "OFFBOARD") {
+        // Taxa de recuperação: tenta re-solicitar OFFBOARD+ARM a cada activation_timeout segundos
+        bool should_request = (this->now() - state5_recovery_time_).seconds() > config_.activation_timeout;
+        if (should_request) {
+          RCLCPP_WARN(this->get_logger(),
+            "⚠️ Estado 5: não está armado/OFFBOARD (armed=%d mode=%s). Tentando reativar...",
+            current_state_.armed, current_state_.mode.c_str());
+          request_offboard();
+          request_arm();
+          state5_recovery_time_ = this->now();
+        }
+        return;
+      }
+
+      // Publica setpoint de posição baixa para segurar o drone no solo
+      pose_msg.pose.position.x = ground_hold_x_;
+      pose_msg.pose.position.y = ground_hold_y_;
+      pose_msg.pose.position.z = ground_hold_z_;
+      pose_msg.pose.orientation.w = 1.0;
+      pose_pub_->publish(pose_msg);
+
+      if (cycle_count_ % 500 == 0) {
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 10000,
+          "🟢 STANDBY NO CHÃO | Setpoint: X=%.2f, Y=%.2f, Z=%.3f | Aguardando novo waypoint...",
+          ground_hold_x_, ground_hold_y_, ground_hold_z_);
+      }
     }
   }
 
@@ -1212,7 +1389,8 @@ private:
   mavros_msgs::msg::State current_state_;
 
   // Estado do controlador - MÁQUINA DE ESTADOS
-  int state_voo_;                    // 0=aguardando waypoint, 1=decolagem, 2=hover, 3=trajetória, 4=pouso
+  int state_voo_;  // 0=aguardando waypoint, 1=decolagem, 2=hover,
+                   // 3=trajetória, 4=pouso, 5=standby no chão (Modo A)
   bool controlador_ativo_;           // Trajetória está ativa?
   bool pouso_em_andamento_;          // Pouso em andamento?
   bool offboard_activated_;          // Ativação OFFBOARD+ARM foi disparada por waypoints?
@@ -1242,6 +1420,18 @@ private:
 
   // Posição Z real do drone (atualizada por odometria)
   double current_z_real_;
+
+  // ── Modo de pouso ──────────────────────────────────────────────────────
+  /// 0=Modo A (standby no chão, OFFBOARD+ARMED), 1=Modo B (DISARM, padrão)
+  int landing_mode_{1};
+
+  // Ponto de ancoragem no solo usado pelo estado 5 (Modo A)
+  double ground_hold_x_{0.0};  ///< X a manter enquanto em standby no chão
+  double ground_hold_y_{0.0};  ///< Y a manter enquanto em standby no chão
+  double ground_hold_z_{0.01}; ///< Z baixo (>= 0.01 m) para segurar no solo
+
+  // Timestamp da última tentativa de reativação OFFBOARD+ARM no estado 5
+  rclcpp::Time state5_recovery_time_;
 
   // Sincronização thread-safe
   std::mutex mutex_;
