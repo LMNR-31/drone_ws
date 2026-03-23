@@ -12,6 +12,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(mavros_msgs REQUIRED)
+find_package(rcl_interfaces REQUIRED)
 
 # 2. DIRETÓRIOS DE INCLUDE (Deve vir ANTES do add_executable)
 # Adicionei todas as variações que vi na sua árvore de arquivos
@@ -43,6 +44,7 @@ ament_target_dependencies(drone_node
   geometry_msgs
   sensor_msgs
   mavros_msgs
+  rcl_interfaces
 )
 
 # =========================================================

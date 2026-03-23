@@ -5,6 +5,7 @@
 #include "mavros_msgs/srv/set_mode.hpp"
 #include "mavros_msgs/srv/command_bool.hpp"
 #include "mavros_msgs/msg/state.hpp"
+#include "rcl_interfaces/msg/set_parameters_result.hpp"
 #include "drone_config.h"
 #include <vector>
 #include <cmath>
@@ -364,6 +365,10 @@ public:
       "⚙️  landing_mode=%d (%s)", landing_mode_,
       landing_mode_ == 0 ? "Modo A - standby no chão" : "Modo B - DISARM");
 
+    // Callback para atualização dinâmica do parâmetro landing_mode em runtime
+    param_cb_handle_ = this->add_on_set_parameters_callback(
+      std::bind(&DroneControllerCompleto::onSetParameters, this, std::placeholders::_1));
+
     RCLCPP_INFO(this->get_logger(), "⚙️  Configuração carregada:");
     RCLCPP_INFO(this->get_logger(), "   hover_altitude=%.2f m  margin=%.3f m",
       config_.hover_altitude, config_.hover_altitude_margin);
@@ -475,6 +480,48 @@ public:
   }
 
 private:
+
+  // ==========================================
+  // CALLBACK DE PARÂMETROS EM RUNTIME
+  // ==========================================
+  /**
+   * @brief Validates and applies dynamic changes to ROS 2 parameters.
+   *
+   * Currently handles `landing_mode`:
+   *  - Must be an integer with value 0 (Modo A) or 1 (Modo B).
+   *  - Updates `landing_mode_` atomically under `mutex_`.
+   *  - Rejects invalid types/values with an explanatory reason.
+   */
+  rcl_interfaces::msg::SetParametersResult onSetParameters(
+    const std::vector<rclcpp::Parameter> & params)
+  {
+    rcl_interfaces::msg::SetParametersResult result;
+    result.successful = true;
+
+    for (const auto & p : params) {
+      if (p.get_name() == "landing_mode") {
+        if (p.get_type() != rclcpp::ParameterType::PARAMETER_INTEGER) {
+          result.successful = false;
+          result.reason = "landing_mode deve ser inteiro (0 ou 1)";
+          return result;
+        }
+        int64_t new_val = p.as_int();
+        if (new_val != 0 && new_val != 1) {
+          result.successful = false;
+          result.reason = "landing_mode deve ser 0 (Modo A - standby no chão) ou 1 (Modo B - DISARM)";
+          return result;
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        int old_val = landing_mode_;
+        landing_mode_ = static_cast<int>(new_val);
+        RCLCPP_INFO(this->get_logger(),
+          "🔄 landing_mode atualizado: %d → %d (%s)",
+          old_val, landing_mode_,
+          landing_mode_ == 0 ? "Modo A - standby no chão" : "Modo B - DISARM");
+      }
+    }
+    return result;
+  }
 
   // ==========================================
   // SOLICITA OFFBOARD MODE
@@ -1435,6 +1482,9 @@ private:
 
   // Sincronização thread-safe
   std::mutex mutex_;
+
+  // Handle para o callback de parâmetros (deve ser mantido vivo enquanto o nó existir)
+  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;
 
   // ==========================================
   // SISTEMA DE FILA DE COMANDOS
