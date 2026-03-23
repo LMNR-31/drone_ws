@@ -1,6 +1,6 @@
 #include <rclcpp/rclcpp.hpp>
 #include <image_transport/image_transport.hpp>
-#include <cv_bridge/cv_bridge.hpp>
+#include <cv_bridge/cv_bridge.h>
 #include <sensor_msgs/msg/image.hpp>
 #include <opencv2/opencv.hpp>
 #include <map>
@@ -18,7 +18,7 @@ private:
     std::thread display_thread_;
 
 public:
-    CameraViewer() : Node("camera_viewer"), it_(this) {
+    CameraViewer() : Node("camera_viewer"), it_(shared_from_this()) {
         this->declare_parameter<int>("window_width", 1600);
         this->declare_parameter<int>("window_height", 900);
 

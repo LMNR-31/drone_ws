@@ -69,7 +69,7 @@ windows:
           ros2 run my_drone_controller drone_node --ros-args \
             --params-file "$DRONE_CONFIG" \
             2>&1 | tee -a /tmp/drone_logs/drone_controller_$(date +%Y%m%d_%H%M%S).log
-
+          ros2 launch my_drone_controller drone_controller.launch.py
   # ── 7. Debug console ───────────────────────────────────────────────────────
   - debug_console:
       layout: tiled

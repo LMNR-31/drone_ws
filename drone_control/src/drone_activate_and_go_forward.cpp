@@ -353,7 +353,7 @@ private:
 
   // Verificação de decolagem
   static constexpr double altitude_threshold_{0.5};
-  static constexpr int max_verify_attempts_{3};
+  static constexpr int max_verify_attempts_{5};
   rclcpp::Time verify_start_time_;
   rclcpp::Time wait_retry_start_time_;
   int verify_attempts_{0};

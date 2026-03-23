@@ -6,7 +6,6 @@
 
 drone_controller_completo:
   ros__parameters:
-
     # ── Altitude ────────────────────────────────────────────────────────
     # Target hover altitude (metres)
     hover_altitude: 2.0
@@ -33,7 +32,7 @@ drone_controller_completo:
 
     # ── Timeouts ─────────────────────────────────────────────────────────
     # Timeout waiting for OFFBOARD + ARM confirmation from FCU (seconds)
-    activation_timeout: 5.0
+    activation_timeout: 3.0
 
     # Timeout before a pending command is automatically marked TIMEOUT (seconds)
     command_timeout: 15.0

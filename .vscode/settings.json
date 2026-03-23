@@ -21,5 +21,14 @@
     "**/build/**": true,
     "**/install/**": true,
     "**/log/**": true
-  }
+  },
+  "ROS2.distro": "jazzy",
+  "python.autoComplete.extraPaths": [
+    "/home/lmnr31/ros2_ws/install/mrs_uav_gazebo_simulator/lib/python3.12/site-packages",
+    "/opt/ros/jazzy/lib/python3.12/site-packages"
+  ],
+  "python.analysis.extraPaths": [
+    "/home/lmnr31/ros2_ws/install/mrs_uav_gazebo_simulator/lib/python3.12/site-packages",
+    "/opt/ros/jazzy/lib/python3.12/site-packages"
+  ]
 }

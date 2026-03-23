@@ -55,7 +55,6 @@ def fmt_uptime(seconds: float) -> str:
 RAM_MAX_MB: float = 512.0   # Upper bound used for the RAM ASCII bar chart
 
 
-
 class DroneStatusMonitor(Node):
     def __init__(self, stdscr):
         super().__init__("drone_status_monitor")
@@ -196,11 +195,11 @@ class DroneStatusMonitor(Node):
                 except curses.error:
                     pass
 
-        C_TITLE   = curses.color_pair(1) | curses.A_BOLD
-        C_OK      = curses.color_pair(2)
-        C_WARN    = curses.color_pair(3)
-        C_DIM     = curses.A_DIM
-        C_BOLD    = curses.A_BOLD
+        C_TITLE = curses.color_pair(1) | curses.A_BOLD
+        C_OK = curses.color_pair(2)
+        C_WARN = curses.color_pair(3)
+        C_DIM = curses.A_DIM
+        C_BOLD = curses.A_BOLD
         C_SECTION = curses.color_pair(4) | curses.A_BOLD
 
         border = "═" * (W - 2)
@@ -248,10 +247,13 @@ class DroneStatusMonitor(Node):
 
         if self.pose:
             p = self.pose.pose.position
+            # NOTA: MAVROS publica em NED, mas MRS converte internamente para ENU
+            # Z positivo = altitude (UP)
             put(row, 0,
-                f"║   X: {p.x:7.2f}m  Y: {p.y:7.2f}m  Z: {p.z:7.2f}m (NED)")
+                f"║   X: {p.x:7.2f}m  Y: {p.y:7.2f}m  Z: {p.z:7.2f}m (NED - MRS Internal)")
             row += 1
-
+            # Altitude já é Z positivo em ENU
+            # Z já é altura positiva
             v = self.vel.twist.linear if self.vel else None
             if v:
                 speed = math.sqrt(v.x**2 + v.y**2 + v.z**2)
