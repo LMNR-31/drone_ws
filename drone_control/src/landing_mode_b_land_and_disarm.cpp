@@ -4,6 +4,7 @@
 #include <rcl_interfaces/msg/parameter.hpp>
 #include <rcl_interfaces/msg/parameter_value.hpp>
 #include <rcl_interfaces/srv/set_parameters.hpp>
+#include <rcl_interfaces/srv/get_parameters.hpp>
 #include <atomic>
 #include <chrono>
 #include <memory>
@@ -83,6 +84,14 @@ public:
     RCLCPP_INFO(this->get_logger(), "✓ Service client criado: %s", service_name.c_str());
 
     // ==========================================
+    // SERVICE CLIENT — get_parameters (verificação)
+    // ==========================================
+    std::string get_service_name = controller_node_ + "/get_parameters";
+    get_param_client_ = this->create_client<rcl_interfaces::srv::GetParameters>(get_service_name);
+
+    RCLCPP_INFO(this->get_logger(), "✓ Service client criado: %s", get_service_name.c_str());
+
+    // ==========================================
     // TIMER — execução sequencial via máquina de estados
     // ==========================================
     timer_ = this->create_wall_timer(100ms, std::bind(&LandingModeBLandAndDisarm::timerCallback, this));
@@ -91,11 +100,14 @@ public:
 private:
 
   static constexpr int kMaxParamRetries = 5;
+  static constexpr int kRetryBackoffTicks = 10;    // 10 × 100 ms = 1 s
+  static constexpr int kLogThrottleInterval = 20;  // 20 × 100 ms = 2 s
 
   enum class State {
     WAIT_SERVICE,
     SET_PARAMETER,
     AWAITING_PARAM_ACK,
+    VERIFY_PARAM,
     PUBLISH_LAND,
     DONE
   };
@@ -109,7 +121,7 @@ private:
         RCLCPP_INFO(this->get_logger(), "✅ Serviço set_parameters disponível");
         state_ = State::SET_PARAMETER;
       } else {
-        if (wait_count_++ % 20 == 0) {
+        if (wait_count_++ % kLogThrottleInterval == 0) {
           RCLCPP_INFO(this->get_logger(), "⏳ Aguardando serviço set_parameters...");
         }
       }
@@ -129,8 +141,12 @@ private:
     case State::AWAITING_PARAM_ACK:
       if (param_ok_) {
         RCLCPP_INFO(this->get_logger(),
-          "✅ landing_mode=1 confirmado pelo controlador. Publicando waypoint de pouso.");
-        state_ = State::PUBLISH_LAND;
+          "✅ set_parameters: landing_mode=1 aceito. Verificando com get_parameters...");
+        verify_ok_ = false;
+        verify_failed_ = false;
+        verify_wait_count_ = 0;
+        verifyLandingMode(1);
+        state_ = State::VERIFY_PARAM;
       } else if (param_failed_ && param_retry_wait_ == 0) {
         param_retry_count_++;
         if (param_retry_count_ >= kMaxParamRetries) {
@@ -144,11 +160,11 @@ private:
             param_retry_count_, kMaxParamRetries);
           param_failed_ = false;
           // Wait ~1 s (10 × 100 ms ticks) before retrying
-          param_retry_wait_ = 10;
+          param_retry_wait_ = kRetryBackoffTicks;
         }
       } else if (!param_failed_ && !param_ok_ && param_retry_wait_ == 0) {
         // Waiting for the async response
-        if (param_wait_count_++ % 20 == 0) {
+        if (param_wait_count_++ % kLogThrottleInterval == 0) {
           RCLCPP_INFO(this->get_logger(),
             "⏳ Aguardando resposta do set_parameters...");
         }
@@ -156,6 +172,36 @@ private:
         // Countdown before next attempt
         if (--param_retry_wait_ == 0) {
           state_ = State::SET_PARAMETER;
+        }
+      }
+      break;
+
+    case State::VERIFY_PARAM:
+      if (verify_ok_) {
+        RCLCPP_INFO(this->get_logger(),
+          "✅ get_parameters confirmou: landing_mode=1 ativo no controlador. Publicando waypoint de pouso.");
+        state_ = State::PUBLISH_LAND;
+      } else if (verify_failed_) {
+        RCLCPP_WARN(this->get_logger(),
+          "⚠️  get_parameters: landing_mode não é 1 no controlador. Re-tentando set...");
+        param_retry_count_++;
+        if (param_retry_count_ >= kMaxParamRetries) {
+          RCLCPP_ERROR(this->get_logger(),
+            "❌ Falha ao confirmar landing_mode=1 após %d tentativas. Encerrando nó.", kMaxParamRetries);
+          timer_->cancel();
+          rclcpp::shutdown();
+        } else {
+          param_ok_ = false;
+          param_failed_ = false;
+          verify_ok_ = false;
+          verify_failed_ = false;
+          param_retry_wait_ = kRetryBackoffTicks;   // 1 s backoff (AWAITING_PARAM_ACK counts down)
+          state_ = State::AWAITING_PARAM_ACK;
+        }
+      } else {
+        if (verify_wait_count_++ % kLogThrottleInterval == 0) {
+          RCLCPP_INFO(this->get_logger(),
+            "⏳ Aguardando resposta do get_parameters...");
         }
       }
       break;
@@ -225,11 +271,41 @@ private:
       });
   }
 
+  void verifyLandingMode(int expected_mode)
+  {
+    auto request = std::make_shared<rcl_interfaces::srv::GetParameters::Request>();
+    request->names.push_back("landing_mode");
+
+    get_param_client_->async_send_request(
+      request,
+      [this, expected_mode](rclcpp::Client<rcl_interfaces::srv::GetParameters>::SharedFuture future) {
+        auto response = future.get();
+        if (!response->values.empty()) {
+          int actual = static_cast<int>(response->values[0].integer_value);
+          if (actual == expected_mode) {
+            RCLCPP_INFO(this->get_logger(),
+              "✅ get_parameters: landing_mode=%d confirmado no controlador", actual);
+            verify_ok_ = true;
+          } else {
+            RCLCPP_WARN(this->get_logger(),
+              "⚠️  get_parameters: esperado landing_mode=%d, mas controlador reporta %d",
+              expected_mode, actual);
+            verify_failed_ = true;
+          }
+        } else {
+          RCLCPP_WARN(this->get_logger(),
+            "⚠️  get_parameters: resposta vazia para landing_mode");
+          verify_failed_ = true;
+        }
+      });
+  }
+
   // ==========================================
   // PUBLISHERS / CLIENTS / TIMERS
   // ==========================================
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr waypoint_pub_;
   rclcpp::Client<rcl_interfaces::srv::SetParameters>::SharedPtr set_param_client_;
+  rclcpp::Client<rcl_interfaces::srv::GetParameters>::SharedPtr get_param_client_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
 
@@ -254,6 +330,11 @@ private:
   int param_retry_count_{0};
   int param_retry_wait_{0};  // ticks to wait before next retry
   int param_wait_count_{0};  // separate counter for AWAITING_PARAM_ACK log throttle
+
+  // get_parameters verification tracking
+  std::atomic<bool> verify_ok_{false};
+  std::atomic<bool> verify_failed_{false};
+  int verify_wait_count_{0};
 
   // Posição atual do drone (odometria) — protegida por odom_mutex_
   std::mutex odom_mutex_;
