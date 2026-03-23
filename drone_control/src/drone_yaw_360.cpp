@@ -1,7 +1,7 @@
 #include <rclcpp/rclcpp.hpp>
-#include <mavros_msgs/msg/position_target.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <mavros_msgs/msg/state.hpp>
+#include "drone_control/msg/yaw_override.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -83,11 +83,11 @@ public:
     // ==========================================
     // PUBLISHERS
     // ==========================================
-    setpoint_pub_ = this->create_publisher<mavros_msgs::msg::PositionTarget>(
-      uav_ns_ + "/mavros/setpoint_raw/local", 10);
+    yaw_override_pub_ = this->create_publisher<drone_control::msg::YawOverride>(
+      uav_ns_ + "/yaw_override/cmd", 10);
 
     RCLCPP_INFO(this->get_logger(), "✓ Publisher criado: %s",
-      (uav_ns_ + "/mavros/setpoint_raw/local").c_str());
+      (uav_ns_ + "/yaw_override/cmd").c_str());
 
     // ==========================================
     // SUBSCRIBERS
@@ -106,9 +106,9 @@ public:
     // ==========================================
     // CLIENTE DE PARÂMETROS (para ativar/desativar override no controller)
     //
-    // Criado em um CallbackGroup dedicado (MutuallyExclusive).  As chamadas a
-    // set_parameters são fire-and-forget (não bloqueantes) para evitar hang no
-    // timer callback — não usamos future.wait_for() aqui.
+    // Mantido para compatibilidade: sinaliza ao controller para congelar a FSM
+    // enquanto o giro acontece (override_active).  O controller continuará
+    // publicando hold setpoints (não para o stream OFFBOARD).
     // ==========================================
     if (auto_disable_controller_) {
       param_cb_group_ = this->create_callback_group(
@@ -136,6 +136,16 @@ public:
   ~DroneYaw360()
   {
     // Tenta desativar o override no controller mesmo em caso de shutdown inesperado (best-effort)
+    if (controller_disabled_) {
+      // Publica mensagem de disable do yaw override
+      if (yaw_override_pub_) {
+        drone_control::msg::YawOverride msg;
+        msg.enable = false;
+        msg.yaw_rate = 0.0f;
+        msg.timeout = 0.0f;
+        yaw_override_pub_->publish(msg);
+      }
+    }
     if (auto_disable_controller_ && controller_disabled_) {
       RCLCPP_INFO(this->get_logger(),
         "🔓 Destrutor: desativando override em '%s' (override_active=false) best-effort...", controller_node_.c_str());
@@ -155,22 +165,20 @@ private:
     FINISH
   };
 
-  // type_mask bits for PositionTarget (1 = ignore that field)
-  static constexpr uint16_t IGNORE_VX       = (1 << 3);   // 8
-  static constexpr uint16_t IGNORE_VY       = (1 << 4);   // 16
-  static constexpr uint16_t IGNORE_VZ       = (1 << 5);   // 32
-  static constexpr uint16_t IGNORE_AFX      = (1 << 6);   // 64
-  static constexpr uint16_t IGNORE_AFY      = (1 << 7);   // 128
-  static constexpr uint16_t IGNORE_AFZ      = (1 << 8);   // 256
-  static constexpr uint16_t IGNORE_YAW      = (1 << 10);  // 1024
-  static constexpr uint16_t IGNORE_YAW_RATE = (1 << 11);  // 2048
-
-  // Position + yaw_rate; ignore velocity, acceleration, yaw angle
-  static constexpr uint16_t MASK_POS_YAWRATE =
-    IGNORE_VX | IGNORE_VY | IGNORE_VZ | IGNORE_AFX | IGNORE_AFY | IGNORE_AFZ | IGNORE_YAW;
-
-  // Position only; ignore velocity, acceleration, yaw angle and yaw_rate
-  static constexpr uint16_t MASK_POS_ONLY = MASK_POS_YAWRATE | IGNORE_YAW_RATE;
+  /**
+   * @brief Publish a YawOverride command to the controller.
+   *
+   * When enable=true, the controller will hold current position and apply yaw_rate.
+   * When enable=false, the controller resumes normal FSM operation.
+   */
+  void publishYawOverride(bool enable, double yaw_rate, float timeout = 0.3f)
+  {
+    drone_control::msg::YawOverride msg;
+    msg.enable = enable;
+    msg.yaw_rate = static_cast<float>(yaw_rate);
+    msg.timeout = timeout;
+    yaw_override_pub_->publish(msg);
+  }
 
   /**
    * @brief Set the `override_active` parameter on the remote controller node (non-blocking).
@@ -218,30 +226,12 @@ private:
     odom_received_ = true;
   }
 
-  void publishPositionTarget(double x, double y, double z, double yaw_rate, uint16_t type_mask)
-  {
-    mavros_msgs::msg::PositionTarget pt;
-    pt.header.stamp = this->now();
-    pt.header.frame_id = "map";
-    pt.coordinate_frame = mavros_msgs::msg::PositionTarget::FRAME_LOCAL_NED;
-    pt.type_mask = type_mask;
-    pt.position.x = x;
-    pt.position.y = y;
-    pt.position.z = z;
-    pt.yaw_rate = static_cast<float>(yaw_rate);
-    setpoint_pub_->publish(pt);
-  }
-
   void timerCallback()
   {
     switch (state_)
     {
       case StateMachine::WAIT_FCU:
       {
-        // Publica setpoint neutro para manter stream ativo
-        const double z = (z_hold_ >= 0.0) ? z_hold_ : current_z_;
-        publishPositionTarget(0.0, 0.0, z, 0.0, MASK_POS_ONLY);
-
         if (current_state_.connected) {
           RCLCPP_INFO(this->get_logger(), "✓ FCU conectada!");
           state_ = StateMachine::WAIT_ODOM;
@@ -252,9 +242,6 @@ private:
 
       case StateMachine::WAIT_ODOM:
       {
-        const double z = (z_hold_ >= 0.0) ? z_hold_ : current_z_;
-        publishPositionTarget(0.0, 0.0, z, 0.0, MASK_POS_ONLY);
-
         if (odom_received_) {
           RCLCPP_INFO(this->get_logger(), "✓ Odom recebida: X=%.2f Y=%.2f Z=%.2f",
             current_x_, current_y_, current_z_);
@@ -266,20 +253,13 @@ private:
 
       case StateMachine::WAIT_OFFBOARD_AND_ARMED:
       {
-        const double z = (z_hold_ >= 0.0) ? z_hold_ : current_z_;
-        publishPositionTarget(current_x_, current_y_, z, 0.0, MASK_POS_ONLY);
-
         if (current_state_.armed && current_state_.mode == "OFFBOARD") {
-          // Congela posição e altitude no momento de iniciar o giro
-          hold_x_ = current_x_;
-          hold_y_ = current_y_;
-          hold_z_ = (z_hold_ >= 0.0) ? z_hold_ : current_z_;
           RCLCPP_INFO(this->get_logger(), "✅ OFFBOARD + ARMED detectado. Iniciando giro %.1f° %s.",
             angle_ * 180.0 / M_PI, ccw_ ? "anti-horário (CCW)" : "horário (CW)");
-          RCLCPP_INFO(this->get_logger(), "   Hold: X=%.2f Y=%.2f Z=%.2f  yaw_rate=%.3f rad/s  duração=%.1fs",
-            hold_x_, hold_y_, hold_z_, yaw_rate_signed_, duration_);
+          RCLCPP_INFO(this->get_logger(), "   yaw_rate=%.3f rad/s  duração=%.1fs",
+            yaw_rate_signed_, duration_);
 
-          // Ativa override no drone_controller_completo para evitar conflito de setpoints
+          // Sinaliza ao controller para congelar FSM (ele mesmo captura a posição hold)
           if (auto_disable_controller_) {
             RCLCPP_INFO(this->get_logger(),
               "🔒 Ativando override em '%s' antes do giro (override_active=true)...", controller_node_.c_str());
@@ -300,7 +280,8 @@ private:
 
       case StateMachine::ROTATING:
       {
-        publishPositionTarget(hold_x_, hold_y_, hold_z_, yaw_rate_signed_, MASK_POS_YAWRATE);
+        // Publica override de yaw para o controller (ele mantém a posição + aplica yaw_rate)
+        publishYawOverride(true, yaw_rate_signed_, 0.3f);
 
         const double elapsed = (this->now() - start_time_).seconds();
         if (elapsed >= duration_) {
@@ -314,8 +295,8 @@ private:
 
       case StateMachine::FINISH:
       {
-        // Segurança: yaw_rate zero, mantém posição por ~1s antes de encerrar
-        publishPositionTarget(hold_x_, hold_y_, hold_z_, 0.0, MASK_POS_YAWRATE);
+        // Desativa override de yaw: controller retoma FSM normal
+        publishYawOverride(false, 0.0, 0.0f);
         if ((this->now() - finish_time_).seconds() >= 1.0) {
           // Desativa override no controller antes de encerrar
           if (auto_disable_controller_ && controller_disabled_) {
@@ -335,7 +316,7 @@ private:
   // ==========================================
   // PUBLISHERS / SUBSCRIBERS / TIMER
   // ==========================================
-  rclcpp::Publisher<mavros_msgs::msg::PositionTarget>::SharedPtr setpoint_pub_;
+  rclcpp::Publisher<drone_control::msg::YawOverride>::SharedPtr yaw_override_pub_;
   rclcpp::Subscription<mavros_msgs::msg::State>::SharedPtr state_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
@@ -386,11 +367,6 @@ private:
   // ROTAÇÃO
   // ==========================================
   rclcpp::Time finish_time_{0, 0, RCL_ROS_TIME};
-
-  // Posição e altitude congeladas no início do giro
-  double hold_x_{0.0};
-  double hold_y_{0.0};
-  double hold_z_{0.0};
 };
 
 int main(int argc, char **argv)

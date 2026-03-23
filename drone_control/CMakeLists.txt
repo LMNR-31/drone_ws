@@ -14,6 +14,14 @@ find_package(mrs_msgs REQUIRED)
 find_package(mavros_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(tf2 REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
+
+# Generate custom messages
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/YawOverride.msg"
+)
+
+ament_export_dependencies(rosidl_default_runtime)
 
 
 # Adicionar no final do arquivo drone_control/CMakeLists.txt:
@@ -98,9 +106,13 @@ ament_target_dependencies(drone_yaw_360
   mavros_msgs
 )
 
+rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
+target_link_libraries(drone_yaw_360 "${cpp_typesupport_target}")
+
 install(TARGETS drone_yaw_360
   DESTINATION lib/${PROJECT_NAME}
 )
+
 
 # Install Python scripts
 install(PROGRAMS
