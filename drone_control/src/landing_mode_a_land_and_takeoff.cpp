@@ -1,10 +1,12 @@
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <nav_msgs/msg/odometry.hpp>
 #include <rcl_interfaces/msg/parameter.hpp>
 #include <rcl_interfaces/msg/parameter_value.hpp>
 #include <rcl_interfaces/srv/set_parameters.hpp>
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <string>
 
 using namespace std::chrono_literals;
@@ -42,6 +44,8 @@ public:
     this->declare_parameter<double>("z_land", 0.05);
     this->declare_parameter<double>("z_takeoff", 1.5);
     this->declare_parameter<double>("wait_seconds", 5.0);
+    this->declare_parameter<bool>("use_current_xy", true);
+    this->declare_parameter<std::string>("odom_topic", "/uav1/mavros/local_position/odom");
 
     controller_node_ = this->get_parameter("controller_node").as_string();
     x_ = this->get_parameter("x").as_double();
@@ -49,10 +53,13 @@ public:
     z_land_ = this->get_parameter("z_land").as_double();
     z_takeoff_ = this->get_parameter("z_takeoff").as_double();
     wait_seconds_ = this->get_parameter("wait_seconds").as_double();
+    use_current_xy_ = this->get_parameter("use_current_xy").as_bool();
+    std::string odom_topic = this->get_parameter("odom_topic").as_string();
 
     RCLCPP_INFO(this->get_logger(), "📋 Parâmetros:");
     RCLCPP_INFO(this->get_logger(), "   controller_node : %s", controller_node_.c_str());
-    RCLCPP_INFO(this->get_logger(), "   x=%.2f, y=%.2f", x_, y_);
+    RCLCPP_INFO(this->get_logger(), "   use_current_xy=%s  (fallback x=%.2f, y=%.2f)",
+      use_current_xy_ ? "true" : "false", x_, y_);
     RCLCPP_INFO(this->get_logger(), "   z_land=%.2f, z_takeoff=%.2f", z_land_, z_takeoff_);
     RCLCPP_INFO(this->get_logger(), "   wait_seconds=%.1f", wait_seconds_);
 
@@ -63,6 +70,20 @@ public:
       "/waypoint_goal", 10);
 
     RCLCPP_INFO(this->get_logger(), "✓ Publisher criado: /waypoint_goal");
+
+    // ==========================================
+    // SUBSCRIBER — odometria para posição atual
+    // ==========================================
+    odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
+      odom_topic, 10,
+      [this](const nav_msgs::msg::Odometry::SharedPtr msg) {
+        std::lock_guard<std::mutex> lock(odom_mutex_);
+        current_x_ = msg->pose.pose.position.x;
+        current_y_ = msg->pose.pose.position.y;
+        odom_received_ = true;
+      });
+
+    RCLCPP_INFO(this->get_logger(), "✓ Subscriber criado: %s", odom_topic.c_str());
 
     // ==========================================
     // SERVICE CLIENT — set_parameters
@@ -111,19 +132,32 @@ private:
 
     case State::PUBLISH_LAND:
     {
+      double pub_x, pub_y;
+      bool used_odom = false;
+      {
+        std::lock_guard<std::mutex> lock(odom_mutex_);
+        used_odom = use_current_xy_ && odom_received_;
+        pub_x = used_odom ? current_x_ : x_;
+        pub_y = used_odom ? current_y_ : y_;
+      }
+
       auto msg = geometry_msgs::msg::PoseStamped();
       msg.header.stamp = this->now();
       msg.header.frame_id = "map";
-      msg.pose.position.x = x_;
-      msg.pose.position.y = y_;
+      msg.pose.position.x = pub_x;
+      msg.pose.position.y = pub_y;
       msg.pose.position.z = z_land_;
       msg.pose.orientation.w = 1.0;
 
       waypoint_pub_->publish(msg);
 
       RCLCPP_INFO(this->get_logger(),
-        "📡 Waypoint de POUSO publicado → X=%.2f, Y=%.2f, Z=%.2f",
-        x_, y_, z_land_);
+        "📡 Waypoint de POUSO publicado (%s) → X=%.2f, Y=%.2f, Z=%.2f",
+        used_odom ? "XY atual" : "XY parametrizado", pub_x, pub_y, z_land_);
+
+      // Salva XY de pouso para usar na decolagem (mesmo local)
+      land_x_ = pub_x;
+      land_y_ = pub_y;
 
       wait_start_ = this->now();
       state_ = State::WAIT_BEFORE_TAKEOFF;
@@ -149,8 +183,8 @@ private:
       auto msg = geometry_msgs::msg::PoseStamped();
       msg.header.stamp = this->now();
       msg.header.frame_id = "map";
-      msg.pose.position.x = x_;
-      msg.pose.position.y = y_;
+      msg.pose.position.x = land_x_;
+      msg.pose.position.y = land_y_;
       msg.pose.position.z = z_takeoff_;
       msg.pose.orientation.w = 1.0;
 
@@ -158,7 +192,7 @@ private:
 
       RCLCPP_INFO(this->get_logger(),
         "🚀 Waypoint de DECOLAGEM publicado → X=%.2f, Y=%.2f, Z=%.2f",
-        x_, y_, z_takeoff_);
+        land_x_, land_y_, z_takeoff_);
 
       state_ = State::DONE;
       break;
@@ -205,6 +239,7 @@ private:
   // ==========================================
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr waypoint_pub_;
   rclcpp::Client<rcl_interfaces::srv::SetParameters>::SharedPtr set_param_client_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
 
   // ==========================================
@@ -216,6 +251,7 @@ private:
   double z_land_{0.05};
   double z_takeoff_{1.5};
   double wait_seconds_{5.0};
+  bool use_current_xy_{true};
 
   // ==========================================
   // ESTADO INTERNO
@@ -224,6 +260,16 @@ private:
   rclcpp::Time wait_start_;
   int wait_count_{0};
   int wait_count_log_{0};
+
+  // Posição atual do drone (odometria) — protegida por odom_mutex_
+  std::mutex odom_mutex_;
+  double current_x_{0.0};
+  double current_y_{0.0};
+  bool odom_received_{false};
+
+  // XY onde o pouso foi enviado (usado para a decolagem posterior)
+  double land_x_{0.0};
+  double land_y_{0.0};
 };
 
 int main(int argc, char **argv)

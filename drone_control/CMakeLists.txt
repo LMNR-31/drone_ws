@@ -69,6 +69,7 @@ ament_target_dependencies(landing_mode_a_land_and_takeoff
   rclcpp
   geometry_msgs
   rcl_interfaces
+  nav_msgs
 )
 
 install(TARGETS landing_mode_a_land_and_takeoff
@@ -81,6 +82,7 @@ ament_target_dependencies(landing_mode_b_land_and_disarm
   rclcpp
   geometry_msgs
   rcl_interfaces
+  nav_msgs
 )
 
 install(TARGETS landing_mode_b_land_and_disarm
