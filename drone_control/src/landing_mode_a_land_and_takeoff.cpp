@@ -4,6 +4,7 @@
 #include <rcl_interfaces/msg/parameter.hpp>
 #include <rcl_interfaces/msg/parameter_value.hpp>
 #include <rcl_interfaces/srv/set_parameters.hpp>
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <mutex>
@@ -101,9 +102,12 @@ public:
 
 private:
 
+  static constexpr int kMaxParamRetries = 5;
+
   enum class State {
     WAIT_SERVICE,
     SET_PARAMETER,
+    AWAITING_PARAM_ACK,
     PUBLISH_LAND,
     WAIT_BEFORE_TAKEOFF,
     PUBLISH_TAKEOFF,
@@ -126,8 +130,48 @@ private:
       break;
 
     case State::SET_PARAMETER:
+      RCLCPP_INFO(this->get_logger(),
+        "📡 [tentativa %d/%d] Iniciando set de landing_mode=0 em %s/set_parameters ...",
+        param_retry_count_ + 1, kMaxParamRetries, controller_node_.c_str());
+      param_ok_ = false;
+      param_failed_ = false;
+      param_retry_wait_ = 0;
       setLandingMode(0);
-      state_ = State::PUBLISH_LAND;
+      state_ = State::AWAITING_PARAM_ACK;
+      break;
+
+    case State::AWAITING_PARAM_ACK:
+      if (param_ok_) {
+        RCLCPP_INFO(this->get_logger(),
+          "✅ landing_mode=0 confirmado pelo controlador. Publicando waypoint de pouso.");
+        state_ = State::PUBLISH_LAND;
+      } else if (param_failed_ && param_retry_wait_ == 0) {
+        param_retry_count_++;
+        if (param_retry_count_ >= kMaxParamRetries) {
+          RCLCPP_ERROR(this->get_logger(),
+            "❌ Falha ao setar landing_mode=0 após %d tentativas. Encerrando nó.", kMaxParamRetries);
+          timer_->cancel();
+          rclcpp::shutdown();
+        } else {
+          RCLCPP_WARN(this->get_logger(),
+            "⚠️  Tentativa %d/%d falhou. Re-tentando em 1 s ...",
+            param_retry_count_, kMaxParamRetries);
+          param_failed_ = false;
+          // Wait ~1 s (10 × 100 ms ticks) before retrying
+          param_retry_wait_ = 10;
+        }
+      } else if (!param_failed_ && !param_ok_ && param_retry_wait_ == 0) {
+        // Waiting for the async response
+        if (param_wait_count_++ % 20 == 0) {
+          RCLCPP_INFO(this->get_logger(),
+            "⏳ Aguardando resposta do set_parameters...");
+        }
+      } else if (param_retry_wait_ > 0) {
+        // Countdown before next attempt
+        if (--param_retry_wait_ == 0) {
+          state_ = State::SET_PARAMETER;
+        }
+      }
       break;
 
     case State::PUBLISH_LAND:
@@ -222,16 +266,16 @@ private:
         auto response = future.get();
         if (!response->results.empty() && response->results[0].successful) {
           RCLCPP_INFO(this->get_logger(),
-            "✅ Parâmetro landing_mode=%d configurado com sucesso no controlador", mode);
+            "✅ set_parameters: landing_mode=%d → sucesso", mode);
+          param_ok_ = true;
         } else {
-          std::string reason = (!response->results.empty()) ? response->results[0].reason : "sem resposta";
+          std::string reason = (!response->results.empty())
+            ? response->results[0].reason : "sem resposta";
           RCLCPP_WARN(this->get_logger(),
-            "⚠️ Falha ao configurar landing_mode=%d: %s", mode, reason.c_str());
+            "⚠️  set_parameters: landing_mode=%d → falha (%s)", mode, reason.c_str());
+          param_failed_ = true;
         }
       });
-
-    RCLCPP_INFO(this->get_logger(),
-      "📡 Solicitando landing_mode=%d em %s/set_parameters ...", mode, controller_node_.c_str());
   }
 
   // ==========================================
@@ -260,6 +304,13 @@ private:
   rclcpp::Time wait_start_;
   int wait_count_{0};
   int wait_count_log_{0};
+
+  // set_parameters async tracking
+  std::atomic<bool> param_ok_{false};
+  std::atomic<bool> param_failed_{false};
+  int param_retry_count_{0};
+  int param_retry_wait_{0};  // ticks to wait before next retry
+  int param_wait_count_{0};  // separate counter for AWAITING_PARAM_ACK log throttle
 
   // Posição atual do drone (odometria) — protegida por odom_mutex_
   std::mutex odom_mutex_;
