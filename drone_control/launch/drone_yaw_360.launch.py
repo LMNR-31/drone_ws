@@ -10,10 +10,11 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'uav_ns': '/uav1',
-            'z_hold': 2.0,
+            'z_hold': -1.0,
             'yaw_rate': 0.8,
             'angle': 6.283185307179586,  # 2 * pi
             'hz': 20.0,
+            'ccw': True,  # True = anti-horário (CCW), False = horário (CW)
         }],
     )
 
