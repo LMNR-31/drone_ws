@@ -29,12 +29,15 @@ public:
     this->declare_parameter<double>("yaw_rate", 0.8);
     this->declare_parameter<double>("angle", 2.0 * M_PI);
     this->declare_parameter<double>("hz", 20.0);
+    // ccw: true = anti-horário (counter-clockwise), false = horário (clockwise)
+    this->declare_parameter<bool>("ccw", true);
 
     uav_ns_   = this->get_parameter("uav_ns").as_string();
     z_hold_   = this->get_parameter("z_hold").as_double();
     yaw_rate_ = this->get_parameter("yaw_rate").as_double();
     angle_    = this->get_parameter("angle").as_double();
     hz_       = this->get_parameter("hz").as_double();
+    ccw_      = this->get_parameter("ccw").as_bool();
 
     if (hz_ <= 0.0) {
       throw std::runtime_error("Parâmetro 'hz' precisa ser > 0");
@@ -43,12 +46,23 @@ public:
       throw std::runtime_error("Parâmetro 'yaw_rate' não pode ser 0");
     }
 
+    // Normaliza: angle é tratado como magnitude; a direção vem de ccw_
+    if (angle_ < 0.0) {
+      RCLCPP_WARN(this->get_logger(),
+        "Parâmetro 'angle' negativo (%.4f rad) — usando valor absoluto. Direção controlada por 'ccw'.", angle_);
+      angle_ = std::abs(angle_);
+    }
+    direction_ = ccw_ ? 1.0 : -1.0;
+
+    const char * dir_str = ccw_ ? "anti-horário (CCW)" : "horário (CW)";
     if (z_hold_ < 0.0) {
-      RCLCPP_INFO(this->get_logger(), "Parâmetros: uav_ns=%s z_hold=<altitude atual> yaw_rate=%.2f rad/s angle=%.2f rad hz=%.1f",
-        uav_ns_.c_str(), yaw_rate_, angle_, hz_);
+      RCLCPP_INFO(this->get_logger(),
+        "Parâmetros: uav_ns=%s z_hold=<altitude atual> yaw_rate=%.2f rad/s angle=%.2f rad hz=%.1f direção=%s",
+        uav_ns_.c_str(), yaw_rate_, angle_, hz_, dir_str);
     } else {
-      RCLCPP_INFO(this->get_logger(), "Parâmetros: uav_ns=%s z_hold=%.2f yaw_rate=%.2f rad/s angle=%.2f rad hz=%.1f",
-        uav_ns_.c_str(), z_hold_, yaw_rate_, angle_, hz_);
+      RCLCPP_INFO(this->get_logger(),
+        "Parâmetros: uav_ns=%s z_hold=%.2f yaw_rate=%.2f rad/s angle=%.2f rad hz=%.1f direção=%s",
+        uav_ns_.c_str(), z_hold_, yaw_rate_, angle_, hz_, dir_str);
     }
 
     // ==========================================
@@ -190,7 +204,8 @@ private:
           hold_x_ = current_x_;
           hold_y_ = current_y_;
           hold_z_ = (z_hold_ >= 0.0) ? z_hold_ : current_z_;
-          RCLCPP_INFO(this->get_logger(), "✅ OFFBOARD + ARMED detectado. Iniciando giro 360.");
+          RCLCPP_INFO(this->get_logger(), "✅ OFFBOARD + ARMED detectado. Iniciando giro 360° %s.",
+            ccw_ ? "anti-horário (CCW)" : "horário (CW)");
           RCLCPP_INFO(this->get_logger(), "   Hold: X=%.2f Y=%.2f Z=%.2f", hold_x_, hold_y_, hold_z_);
           start_yaw_ = 0.0;
           start_time_ = this->now();
@@ -207,15 +222,14 @@ private:
       case StateMachine::ROTATING:
       {
         const double elapsed = (this->now() - start_time_).seconds();
-        const double direction = (angle_ >= 0.0) ? 1.0 : -1.0;
-        const double rotated = std::min(std::abs(angle_), std::abs(yaw_rate_) * elapsed);
-        const double yaw = start_yaw_ + direction * rotated;
+        const double rotated = std::min(angle_, std::abs(yaw_rate_) * elapsed);
+        const double yaw = start_yaw_ + direction_ * rotated;
 
         publishSetpointYaw(yaw, true);
 
-        if (rotated >= std::abs(angle_) - 1e-3) {
-          RCLCPP_INFO(this->get_logger(), "✅ Giro concluído! (%.1f°)",
-            angle_ * 180.0 / M_PI);
+        if (rotated >= angle_ - 1e-3) {
+          RCLCPP_INFO(this->get_logger(), "✅ Giro concluído! (%.1f° %s)",
+            angle_ * 180.0 / M_PI, ccw_ ? "CCW" : "CW");
           finish_yaw_ = yaw;
           finish_time_ = this->now();
           state_ = StateMachine::FINISH;
@@ -266,6 +280,10 @@ private:
   double yaw_rate_{0.8};
   double angle_{2.0 * M_PI};
   double hz_{20.0};
+  bool   ccw_{true};
+
+  // Direção calculada a partir de ccw_: +1.0 (CCW) ou -1.0 (CW)
+  double direction_{1.0};
 
   // ==========================================
   // ROTAÇÃO
