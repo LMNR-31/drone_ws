@@ -94,10 +94,8 @@ add_executable(drone_yaw_360 src/drone_yaw_360.cpp)
 
 ament_target_dependencies(drone_yaw_360
   rclcpp
-  geometry_msgs
   nav_msgs
   mavros_msgs
-  tf2
 )
 
 install(TARGETS drone_yaw_360
