@@ -298,7 +298,7 @@ private:
     pose1.position.x = current_x_;
     pose1.position.y = current_y_;
     pose1.position.z = 2.0;
-    pose1.orientation.w = 1.0;
+    pose1.orientation.w = 1.57;
     msg.poses.push_back(pose1);
 
     waypoints_pub_->publish(msg);
