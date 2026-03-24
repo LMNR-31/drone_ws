@@ -1325,6 +1325,7 @@ class LPVMPC_Drone(Node):
         ----------
         ref : tuple
             (X_ref, Xd, Xdd, Y_ref, Yd, Ydd, Z_ref, Zd, Zdd, psi_ref)
+            Z_ref/Zd/Zdd are in NED (negative when airborne).
 
         Returns
         -------
@@ -1332,12 +1333,21 @@ class LPVMPC_Drone(Node):
         """
         X_ref, Xd, Xdd, Y_ref, Yd, Ydd, Z_ref, Zd, Zdd, psi_ref = ref
 
+        # pos_controller() was designed with altitude-up (ENU) convention:
+        #   U1 = (vz + g) * m  →  for hover vz≈0, U1≈mg (correct only when
+        #   z is positive-up).  Internal state and all references use NED
+        #   (z negative when airborne).  Convert z-axis quantities to
+        #   altitude-up just for this call; everything else stays in NED.
+        states_enu = self.states.copy()
+        states_enu[2] = -self.states[2]   # w: NED body-z  → ENU body-z
+        states_enu[8] = -self.states[8]   # position z: NED → altitude-up
+
         try:
             phi_ref, theta_ref, U1_new = self.support.pos_controller(
                 X_ref, Xd, Xdd,
                 Y_ref, Yd, Ydd,
-                Z_ref, Zd, Zdd,
-                psi_ref, self.states)
+                -Z_ref, -Zd, -Zdd,   # NED z → altitude-up for pos_controller
+                psi_ref, states_enu)
         except Exception as exc:
             self.get_logger().warn(f'pos_controller error: {exc}')
             return None
