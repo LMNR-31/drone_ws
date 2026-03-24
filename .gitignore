@@ -2,3 +2,4 @@ build/
 install/
 log/
 drone_control/src/__pycache__/
+drone_custom_control/drone_custom_control/nodes/__pycache__/
