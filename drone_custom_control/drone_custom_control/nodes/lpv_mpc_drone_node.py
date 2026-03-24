@@ -9,9 +9,12 @@ NO WARRANTY — use at your own risk.
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rcl_interfaces.msg import SetParametersResult
 import numpy as np
 from nav_msgs.msg import Odometry
-from mavros_msgs.msg import AttitudeTarget
+from mavros_msgs.msg import AttitudeTarget, State
+from mavros_msgs.srv import SetMode, CommandBool
+from geometry_msgs.msg import PoseArray, PoseStamped
 from scipy.interpolate import CubicSpline
 
 class SupportFilesDrone:
@@ -744,212 +747,926 @@ class SupportFilesDrone:
 
         return new_states, states_ani, U_ani
 
+
+
 # ==================== ROS2 NODE ====================
 class LPVMPC_Drone(Node):
+    """LPV-MPC drone controller with full flight FSM.
+
+    States
+    ------
+    0 WAIT_WP        – idle, waiting for a waypoint / goal command
+    1 TAKEOFF        – arm + OFFBOARD, climb to target altitude
+    2 HOVER          – hold current goal position
+    3 TRAJECTORY     – execute discrete-waypoint trajectory (type B)
+    4 LANDING        – descend until landed, then branch on landing_mode
+    5 STANDBY_GROUND – (landing_mode==0 only) remain OFFBOARD+ARM on ground
+    """
+
+    # ── FSM state constants ──────────────────────────────────────────────────
+    _WAIT_WP        = 0
+    _TAKEOFF        = 1
+    _HOVER          = 2
+    _TRAJECTORY     = 3
+    _LANDING        = 4
+    _STANDBY_GROUND = 5
+
+    # Number of 100 Hz cycles to stream setpoints before requesting OFFBOARD
+    _WARMUP_CYCLES = 200   # = 2 s
+
     def __init__(self):
         super().__init__('lpv_mpc_drone_node')
-        self.declare_parameter('uav_name', 'uav1')
-        self.declare_parameter('invert_attitude', False)
+
+        # ── Declare & read parameters ────────────────────────────────────────
+        self.declare_parameter('uav_name',              'uav1')
+        self.declare_parameter('invert_attitude',       False)
+        self.declare_parameter('enabled',               True)
+        self.declare_parameter('override_active',       False)
+        self.declare_parameter('landing_mode',          1)
+        self.declare_parameter('hover_altitude',        2.0)
+        self.declare_parameter('hover_altitude_margin', 0.3)
+        self.declare_parameter('land_z_threshold',      0.3)
+        self.declare_parameter('waypoint_duration',     5.0)
+        self.declare_parameter('activation_timeout',    10.0)
+        self.declare_parameter('landing_timeout',       5.0)
+        self.declare_parameter('max_ref_speed_xy',      2.0)
+        self.declare_parameter('max_ref_speed_z',       1.0)
+
         uav = self.get_parameter('uav_name').value
 
-        self.support = SupportFilesDrone()
-        
-        self.hz = self.support.constants['hz']                     # horizonte = 4
-        self.innerDyn_length = self.support.constants['innerDyn_length']   # = 4
-        self.Ts = self.support.constants['Ts']                     # 0.1 s
-        self.omega_total = 0.0                                     # termo giroscópico (pode ser zero)
+        self.enabled            = bool(self.get_parameter('enabled').value)
+        self.override_active    = bool(self.get_parameter('override_active').value)
+        self.landing_mode       = int(self.get_parameter('landing_mode').value)
+        self.hover_altitude     = float(self.get_parameter('hover_altitude').value)
+        self.hover_alt_margin   = float(self.get_parameter('hover_altitude_margin').value)
+        self.land_z_threshold   = float(self.get_parameter('land_z_threshold').value)
+        self.waypoint_duration  = float(self.get_parameter('waypoint_duration').value)
+        self.activation_timeout = float(self.get_parameter('activation_timeout').value)
+        self.landing_timeout    = float(self.get_parameter('landing_timeout').value)
+        self.max_ref_speed_xy   = float(self.get_parameter('max_ref_speed_xy').value)
+        self.max_ref_speed_z    = float(self.get_parameter('max_ref_speed_z').value)
 
-        self.states=np.array([0.,0.,0.,0.,0.,0., 0.,0.,1.0, 0.,0.,0.])
-        self.U1=self.support.constants['m']*self.support.constants['g']
-        self.U2=self.U3 = self.U4 = 0.0
+        if self.landing_mode not in (0, 1):
+            self.get_logger().warn(
+                f'landing_mode={self.landing_mode} invalid; using 1 (DISARM)')
+            self.landing_mode = 1
 
-        # ==== TRAJECTORY DEFINITION ====
-        self.waypoints = np.array([
-            [0.0, 0.0, 2.0],
-            [3.0, 3.0, 4.0],
-            [6.0, 1.0, 2.0],
-            [0.0, 0.0, 2.0] # return to the starting point for a closed loop trajectory
-        ])
-        # ===============================
+        self.add_on_set_parameters_callback(self._on_params)
 
-        T_total = 50.0          # ← ajuste aqui (20s = muito agressivo, 45s = confortável)
-        n_way = len(self.waypoints)
-        t_way = np.linspace(0, T_total, n_way, endpoint=False)
-        t_way_closed = np.append(t_way, T_total)
-        waypoints_closed = np.vstack([self.waypoints, self.waypoints[0]])
+        # ── MPC support (SupportFilesDrone — unchanged) ──────────────────────
+        self.support         = SupportFilesDrone()
+        self.hz              = self.support.constants['hz']
+        self.innerDyn_length = self.support.constants['innerDyn_length']
+        self.Ts              = self.support.constants['Ts']
+        self.omega_total     = 0.0
 
-        # Splines cúbicas com velocidade de entrada mais alta
-        cs_x = CubicSpline(t_way_closed, waypoints_closed[:,0], bc_type='periodic')
-        cs_y = CubicSpline(t_way_closed, waypoints_closed[:,1], bc_type='periodic')
-        cs_z = CubicSpline(t_way_closed, waypoints_closed[:,2], bc_type='periodic')
+        # Drone state vector [u, v, w, p, q, r, x, y, z, phi, theta, psi]
+        self.states = np.array([0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.])
+        self.U1     = self.support.constants['m'] * self.support.constants['g']
+        self.U2 = self.U3 = self.U4 = 0.0
 
-        t = np.linspace(0, T_total, int(T_total/self.Ts)+1)   # Ts = 0.1 s
-        self.X_ref = cs_x(t)
-        self.Y_ref = cs_y(t)
-        self.Z_ref = cs_z(t)
+        # ── FSM variables ────────────────────────────────────────────────────
+        self.state_voo     = self._WAIT_WP
+        self.odom_received = False
+        self.mavros_state  = State()
 
-        dt=t[1]-t[0]
-        self.Xd_ref=np.gradient(self.X_ref,dt)
-        self.Yd_ref=np.gradient(self.Y_ref,dt)
-        self.Zd_ref=np.gradient(self.Z_ref,dt)
-        self.Xdd_ref=np.gradient(self.Xd_ref,dt)
-        self.Ydd_ref=np.gradient(self.Yd_ref,dt)
-        self.Zdd_ref=np.gradient(self.Zd_ref,dt)
-        
-        # Calculate psi from the direction of movement
-        self.psi_ref=np.arctan2(self.Yd_ref,self.Xd_ref)
-        self.psi_ref=np.unwrap(self.psi_ref)
-        
-        # New Time Control Variables
-        self.dt_traj = dt # 0.1 s
-        self.start_time = self.get_clock().now()
-        self.last_time = self.get_clock().now()
-        self.ref_frac = 0.0
-        
-        # self.ref_idx=0
+        # OFFBOARD / ARM request tracking
+        self.offboard_activated   = False
+        self.activation_confirmed = False
+        self.activation_time      = self.get_clock().now()
+        self._last_offboard_req   = None   # rclpy.Time or None
+        self._last_arm_req        = None
+        self._req_min_interval    = 1.0    # s – minimum interval between repeat requests
 
+        # Warmup counter (stream setpoints before requesting OFFBOARD)
+        self._warmup_counter = 0
+
+        # Waypoint / trajectory
+        self.last_waypoint_goal   = None   # [x, y, z]
+        self.trajectory_waypoints = []     # list of [x, y, z]
+        self.trajectory_started   = False
+        self.trajectory_start_time = None
+        self.current_waypoint_idx  = 0
+
+        # Landing
+        self.landing_active         = False
+        self.landing_start_time_set = False
+        self.landing_start_time     = self.get_clock().now()
+        self.ground_hold            = [0.0, 0.0, max(0.01, self.land_z_threshold)]
+
+        # Psi tracking (trajectory, unwrapped)
+        self.last_psi_ref = 0.0
+
+        # Takeoff counter (cycles after OFFBOARD+ARM confirmed)
+        self.takeoff_counter = 0
+
+        # Last published command (republished at 100 Hz between MPC steps)
+        self._hold_cmd = None
+
+        # State-5 recovery interval timer
+        self._state5_recovery_time = self.get_clock().now()
+
+        # Decimation: run MPC every N cycles (N = Ts / 0.01 = 10)
+        self._mpc_decimation = max(1, round(self.Ts / 0.01))
+        self._cycle_count    = 0
+
+        # ── Publishers ───────────────────────────────────────────────────────
+        self.att_pub = self.create_publisher(
+            AttitudeTarget, f'/{uav}/mavros/setpoint_raw/attitude', 10)
+
+        # ── Subscribers ──────────────────────────────────────────────────────
         qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
-        self.create_subscription(Odometry, f'/{uav}/mavros/local_position/odom', self.odom_cb, qos)
-        self.att_pub = self.create_publisher(AttitudeTarget, f'/{uav}/mavros/setpoint_raw/attitude', 10)
+        self.create_subscription(
+            Odometry, f'/{uav}/mavros/local_position/odom', self.odom_cb, qos)
+        self.create_subscription(
+            State, f'/{uav}/mavros/state', self._state_cb, 10)
+        self.create_subscription(
+            PoseArray, '/waypoints', self._waypoints_cb, 1)
+        self.create_subscription(
+            PoseStamped, '/waypoint_goal', self._waypoint_goal_cb, 1)
 
-        self.timer = self.create_timer(0.1, self.control_loop)
-        self.get_logger().info("LPV-MPC loaded.")
+        # ── Service clients ──────────────────────────────────────────────────
+        self._mode_client = self.create_client(SetMode, f'/{uav}/mavros/set_mode')
+        self._arm_client  = self.create_client(CommandBool, f'/{uav}/mavros/cmd/arming')
+
+        # ── Timer: 100 Hz ────────────────────────────────────────────────────
+        self.timer = self.create_timer(0.01, self.control_loop)
+
+        self.get_logger().info(
+            f'LPV-MPC FSM node started | uav={uav} '
+            f'landing_mode={self.landing_mode} '
+            f'hover_alt={self.hover_altitude:.1f}m '
+            f'land_z_thr={self.land_z_threshold:.2f}m '
+            f'warmup={self._WARMUP_CYCLES} cycles'
+        )
+
+    # ── Dynamic parameter callback ───────────────────────────────────────────
+    def _on_params(self, params):
+        result = SetParametersResult(successful=True)
+        for p in params:
+            if p.name == 'enabled':
+                old = self.enabled
+                self.enabled = bool(p.value)
+                if old != self.enabled:
+                    self.get_logger().info(
+                        f'enabled: {old} -> {self.enabled}')
+            elif p.name == 'override_active':
+                old = self.override_active
+                self.override_active = bool(p.value)
+                if not old and self.override_active:
+                    self.get_logger().warn(
+                        'override_active -> true: FSM frozen, publishing hold setpoint')
+                elif old and not self.override_active:
+                    self.get_logger().warn(
+                        'override_active -> false: normal operation resumed')
+            elif p.name == 'landing_mode':
+                val = int(p.value)
+                if val not in (0, 1):
+                    result.successful = False
+                    result.reason = 'landing_mode must be 0 (standby) or 1 (DISARM)'
+                    return result
+                self.landing_mode = val
+                self.get_logger().info(
+                    f'landing_mode -> {val} '
+                    f'({"standby on ground" if val == 0 else "DISARM"})')
+        return result
+
+    # ── Subscribers callbacks ────────────────────────────────────────────────
+    def _state_cb(self, msg):
+        self.mavros_state = msg
 
     def odom_cb(self, msg):
         p = msg.pose.pose.position
-        v_linear = msg.twist.twist.linear
-        v_angular = msg.twist.twist.angular   # <-- taxa angular
+        v = msg.twist.twist.linear
+        w = msg.twist.twist.angular
         q = msg.pose.pose.orientation
         qw = np.array([q.x, q.y, q.z, q.w])
         if qw[3] < 0:
             qw = -qw
-        phi = np.arctan2(2*(qw[3]*qw[0] + qw[1]*qw[2]), 1 - 2*(qw[0]**2 + qw[1]**2))
-        theta = np.arcsin(2*(qw[3]*qw[1] - qw[2]*qw[0]))
-        psi = np.arctan2(2*(qw[3]*qw[2] + qw[0]*qw[1]), 1 - 2*(qw[1]**2 + qw[2]**2))
-        self.states = np.array([v_linear.x, v_linear.y, v_linear.z,
-                                v_angular.x, v_angular.y, v_angular.z,   # <-- p, q, r
-                                p.x, p.y, p.z, phi, theta, psi])
-        
+        phi   = np.arctan2(
+            2*(qw[3]*qw[0] + qw[1]*qw[2]),
+            1 - 2*(qw[0]**2 + qw[1]**2))
+        theta = np.arcsin(np.clip(2*(qw[3]*qw[1] - qw[2]*qw[0]), -1.0, 1.0))
+        psi   = np.arctan2(
+            2*(qw[3]*qw[2] + qw[0]*qw[1]),
+            1 - 2*(qw[1]**2 + qw[2]**2))
+        self.states = np.array([
+            v.x, v.y, v.z,
+            w.x, w.y, w.z,
+            p.x, p.y, p.z,
+            phi, theta, psi])
+        self.odom_received = True
 
-    def control_loop(self):
+    def _waypoints_cb(self, msg):
+        """Handle PoseArray: 1 pose = takeoff/land, 2+ = trajectory."""
+        if len(msg.poses) < 1:
+            self.get_logger().warn('Empty waypoints message, ignoring')
+            return
+
+        last_z = msg.poses[-1].position.z
+
+        # ── Single waypoint ──────────────────────────────────────────────────
+        if len(msg.poses) == 1:
+            if last_z < self.land_z_threshold:
+                # Landing command
+                if self.state_voo == self._STANDBY_GROUND:
+                    self.get_logger().info(
+                        'Landing command ignored: already on ground (state 5)',
+                        throttle_duration_sec=5.0)
+                    return
+                self.get_logger().warn(
+                    f'LANDING commanded via waypoints! Z={last_z:.2f}m')
+                self.ground_hold = [
+                    msg.poses[0].position.x,
+                    msg.poses[0].position.y,
+                    max(0.01, self.land_z_threshold)]
+                self._initiate_landing()
+            else:
+                # Takeoff / hover command
+                self.get_logger().info(
+                    f'TAKEOFF/HOVER waypoint: '
+                    f'X={msg.poses[0].position.x:.2f} '
+                    f'Y={msg.poses[0].position.y:.2f} '
+                    f'Z={last_z:.2f}')
+                self.last_waypoint_goal = [
+                    msg.poses[0].position.x,
+                    msg.poses[0].position.y,
+                    msg.poses[0].position.z]
+                self.trajectory_waypoints.clear()
+                self.trajectory_started = False
+                self.current_waypoint_idx = 0
+                self._initiate_takeoff()
+            return
+
+        # ── Trajectory (2+ waypoints) ────────────────────────────────────────
+        if self.state_voo in (self._LANDING, self._STANDBY_GROUND):
+            self.get_logger().warn(
+                f'Ignoring trajectory while in state {self.state_voo} '
+                f'(landing/standby ground)')
+            return
+
+        self.trajectory_waypoints = [
+            [p.position.x, p.position.y, p.position.z]
+            for p in msg.poses]
+        self.trajectory_started   = False
+        self.current_waypoint_idx = 0
+
+        self.get_logger().info(
+            f'Trajectory stored: {len(self.trajectory_waypoints)} waypoints '
+            f'({self.waypoint_duration:.1f}s each)')
+        for i, wp in enumerate(self.trajectory_waypoints):
+            self.get_logger().info(
+                f'  WP[{i}]: X={wp[0]:.2f} Y={wp[1]:.2f} Z={wp[2]:.2f}')
+
+        if self.state_voo == self._HOVER:
+            self.state_voo = self._TRAJECTORY
+            self.get_logger().info('HOVER -> TRAJECTORY (trajectory activated)')
+        else:
+            self.get_logger().info(
+                f'Trajectory stored; will activate when HOVER is reached '
+                f'(current state={self.state_voo})')
+
+    def _waypoint_goal_cb(self, msg):
+        """Handle PoseStamped single goal."""
+        x = msg.pose.position.x
+        y = msg.pose.position.y
+        z = msg.pose.position.z
+
+        # Landing detection while in flight
+        if self.state_voo in (self._HOVER, self._TRAJECTORY):
+            if z < self.land_z_threshold:
+                self.get_logger().warn(
+                    f'LANDING via goal! Z={z:.2f}m')
+                self.ground_hold = [x, y, max(0.01, self.land_z_threshold)]
+                self._initiate_landing()
+                return
+
+        # Ignore new goals during active landing
+        if self.state_voo == self._LANDING:
+            if not self.mavros_state.armed:
+                # Drone disarmed: ready for new cycle
+                self.get_logger().info('Drone disarmed during landing -> WAIT_WP')
+                self.offboard_activated   = False
+                self.activation_confirmed = False
+                self.state_voo            = self._WAIT_WP
+                self.takeoff_counter      = 0
+                self.landing_active       = False
+            return
+
+        # State 5: accept flight waypoints to resume
+        if self.state_voo == self._STANDBY_GROUND:
+            if z >= self.land_z_threshold:
+                self.get_logger().info(
+                    f'[State 5] Flight waypoint received, resuming: '
+                    f'X={x:.2f} Y={y:.2f} Z={z:.2f}')
+                self.last_waypoint_goal   = [x, y, z]
+                self.trajectory_waypoints.clear()
+                self.trajectory_started   = False
+                self.current_waypoint_idx = 0
+                self.landing_active       = False
+                self._initiate_takeoff()
+            else:
+                self.get_logger().info(
+                    '[State 5] Landing waypoint ignored (already on ground)',
+                    throttle_duration_sec=5.0)
+            return
+
+        # State 3 (trajectory): store as override setpoint
+        if self.state_voo == self._TRAJECTORY:
+            self.last_waypoint_goal = [x, y, z]
+            return
+
+        # Normal: update goal
+        self.last_waypoint_goal = [x, y, z]
+        self.get_logger().info(
+            f'Waypoint goal updated: X={x:.2f} Y={y:.2f} Z={z:.2f}')
+
+    # ── FSM helpers ──────────────────────────────────────────────────────────
+    def _initiate_landing(self):
+        """Transition to LANDING state."""
+        self.landing_active         = True
+        self.landing_start_time_set = False
+        self.state_voo              = self._LANDING
+        self.get_logger().warn('-> LANDING state')
+
+    def _initiate_takeoff(self):
+        """Transition to TAKEOFF state, setting up warmup / activation."""
+        if self.last_waypoint_goal is None:
+            self.get_logger().warn('_initiate_takeoff: no waypoint goal set')
+            return
+
+        self.landing_active  = False
+        self.state_voo       = self._TAKEOFF
+        self.takeoff_counter = 0
+
+        # If already OFFBOARD+ARM (e.g. from state 5), skip warmup
+        if (self.mavros_state.armed
+                and self.mavros_state.mode == 'OFFBOARD'):
+            self._warmup_counter      = self._WARMUP_CYCLES
+            self.offboard_activated   = True
+            self.activation_confirmed = True
+            self.get_logger().info(
+                f'TAKEOFF: already OFFBOARD+ARM – skipping warmup '
+                f'-> goal={self.last_waypoint_goal}')
+        else:
+            self._warmup_counter      = 0
+            self.offboard_activated   = False
+            self.activation_confirmed = False
+            self.get_logger().info(
+                f'TAKEOFF: warmup phase ({self._WARMUP_CYCLES} cycles) '
+                f'-> goal={self.last_waypoint_goal}')
+
+    # ── MAVROS service helpers ────────────────────────────────────────────────
+    def _request_offboard(self):
+        """Rate-limited async request for OFFBOARD mode."""
         now = self.get_clock().now()
-        elapsed = (now - self.start_time).nanoseconds / 1e9
-        self.ref_frac = (elapsed / self.dt_traj) % len(self.X_ref)
-        idx = int(self.ref_frac)
-        frac = self.ref_frac - idx
+        if self._last_offboard_req is not None:
+            elapsed = (now - self._last_offboard_req).nanoseconds / 1e9
+            if elapsed < self._req_min_interval:
+                return
+        if not self._mode_client.service_is_ready():
+            self.get_logger().warn('set_mode service not ready')
+            return
+        req = SetMode.Request()
+        req.custom_mode = 'OFFBOARD'
+        self._mode_client.call_async(req)
+        self._last_offboard_req = now
+        self.get_logger().info('OFFBOARD mode requested')
 
-        def interp(arr, idx, frac):
-            n = len(arr)
-            return arr[idx] * (1 - frac) + arr[(idx + 1) % n] * frac
+    def _request_arm(self):
+        """Rate-limited async ARM request."""
+        now = self.get_clock().now()
+        if self._last_arm_req is not None:
+            elapsed = (now - self._last_arm_req).nanoseconds / 1e9
+            if elapsed < self._req_min_interval:
+                return
+        if not self._arm_client.service_is_ready():
+            self.get_logger().warn('arming service not ready')
+            return
+        req = CommandBool.Request()
+        req.value = True
+        self._arm_client.call_async(req)
+        self._last_arm_req = now
+        self.get_logger().info('ARM requested')
 
-        X_ref = interp(self.X_ref, idx, frac)
-        Y_ref = interp(self.Y_ref, idx, frac)
-        Z_ref = interp(self.Z_ref, idx, frac)
-        Xd_ref = interp(self.Xd_ref, idx, frac)
-        Yd_ref = interp(self.Yd_ref, idx, frac)
-        Zd_ref = interp(self.Zd_ref, idx, frac)
-        Xdd_ref = interp(self.Xdd_ref, idx, frac)
-        Ydd_ref = interp(self.Ydd_ref, idx, frac)
-        Zdd_ref = interp(self.Zdd_ref, idx, frac)
-        psi_ref = interp(self.psi_ref, idx, frac)
+    def _request_disarm(self):
+        """Async DISARM request."""
+        if not self._arm_client.service_is_ready():
+            return
+        req = CommandBool.Request()
+        req.value = False
+        self._arm_client.call_async(req)
+        self.get_logger().info('DISARM requested')
 
-        # 1) Controlador de posição (gera ângulos de referência e U1)
-        phi_ref, theta_ref, U1_new = self.support.pos_controller(
-            X_ref, Xd_ref, Xdd_ref,
-            Y_ref, Yd_ref, Ydd_ref,
-            Z_ref, Zd_ref, Zdd_ref,
-            psi_ref, self.states)
-        
+    # ── Reference computation ─────────────────────────────────────────────────
+    def _goal_ref(self, gx, gy, gz):
+        """Return MPC reference tuple for holding/approaching a fixed goal.
+
+        Returns
+        -------
+        (X_ref, Xd, Xdd, Y_ref, Yd, Ydd, Z_ref, Zd, Zdd, psi_ref)
+        """
+        x_now = self.states[6]
+        y_now = self.states[7]
+        z_now = self.states[8]
+
+        dx = gx - x_now
+        dy = gy - y_now
+        dz = gz - z_now
+
+        dist_xy = float(np.sqrt(dx**2 + dy**2))
+        if dist_xy > 0.01:
+            vx = (dx / dist_xy) * min(dist_xy, self.max_ref_speed_xy)
+            vy = (dy / dist_xy) * min(dist_xy, self.max_ref_speed_xy)
+        else:
+            vx = vy = 0.0
+
+        vz = float(np.clip(dz, -self.max_ref_speed_z, self.max_ref_speed_z))
+
+        return (gx, vx, 0.0, gy, vy, 0.0, gz, vz, 0.0, self.last_psi_ref)
+
+    def _trajectory_ref(self, now):
+        """Return MPC reference tuple for trajectory execution (type B).
+
+        Selects the current discrete waypoint based on elapsed time, computes
+        velocity toward it (saturated), and updates the unwrapped psi reference.
+
+        Returns None if trajectory is invalid.
+        """
+        if not self.trajectory_waypoints:
+            self.get_logger().warn('_trajectory_ref: no waypoints, -> HOVER')
+            self.state_voo = self._HOVER
+            return None
+
+        # Initialise timing on first call
+        if not self.trajectory_started:
+            self.trajectory_start_time = now
+            self.trajectory_started    = True
+            self.current_waypoint_idx  = 0
+            self.get_logger().info(
+                f'Trajectory started: {len(self.trajectory_waypoints)} WPs, '
+                f'{self.waypoint_duration:.1f}s each')
+
+        elapsed = (now - self.trajectory_start_time).nanoseconds / 1e9
+        total   = self.waypoint_duration * len(self.trajectory_waypoints)
+
+        idx = min(
+            int(elapsed / self.waypoint_duration),
+            len(self.trajectory_waypoints) - 1)
+
+        if idx < 0 or idx >= len(self.trajectory_waypoints):
+            self.get_logger().error(
+                f'Waypoint index {idx} out of range, -> HOVER')
+            self.state_voo = self._HOVER
+            return None
+
+        self.current_waypoint_idx = idx
+        wp = self.trajectory_waypoints[idx]
+
+        x_now = self.states[6]
+        y_now = self.states[7]
+
+        dx = wp[0] - x_now
+        dy = wp[1] - y_now
+        dz = wp[2] - self.states[8]
+
+        dist_xy = float(np.sqrt(dx**2 + dy**2))
+        if dist_xy > 0.01:
+            vx = (dx / dist_xy) * min(dist_xy, self.max_ref_speed_xy)
+            vy = (dy / dist_xy) * min(dist_xy, self.max_ref_speed_xy)
+        else:
+            vx = vy = 0.0
+
+        vz = float(np.clip(dz, -self.max_ref_speed_z, self.max_ref_speed_z))
+
+        # Unwrapped psi reference from XY velocity direction
+        speed_xy = float(np.sqrt(vx**2 + vy**2))
+        if speed_xy > 0.05:
+            psi_new = float(np.arctan2(vy, vx))
+            dpsi = psi_new - self.last_psi_ref
+            # Wrap dpsi to (-pi, pi]
+            dpsi = (dpsi + np.pi) % (2 * np.pi) - np.pi
+            self.last_psi_ref += dpsi
+
+        # Progress log (every 500 cycles ≈ 5 s)
+        if self._cycle_count % 500 == 0:
+            pct = (elapsed / total * 100.0) if total > 0 else 0.0
+            self.get_logger().info(
+                f'TRAJECTORY WP[{idx}/{len(self.trajectory_waypoints)-1}] '
+                f'X={wp[0]:.2f} Y={wp[1]:.2f} Z={wp[2]:.2f} '
+                f'z_real={self.states[8]:.2f} {pct:.1f}%')
+
+        # Check completion
+        if elapsed >= total:
+            self.get_logger().info('Trajectory complete -> HOVER')
+            self.state_voo        = self._HOVER
+            self.trajectory_started = False
+
+        return (wp[0], vx, 0.0, wp[1], vy, 0.0, wp[2], vz, 0.0, self.last_psi_ref)
+
+    def _compute_reference(self, now):
+        """Return reference tuple for the current FSM state, or None."""
+        sv = self.state_voo
+
+        if sv == self._WAIT_WP:
+            return None
+
+        if sv in (self._TAKEOFF, self._HOVER):
+            if self.last_waypoint_goal is None:
+                return None
+            return self._goal_ref(*self.last_waypoint_goal)
+
+        if sv == self._TRAJECTORY:
+            return self._trajectory_ref(now)
+
+        if sv == self._LANDING:
+            if self.landing_mode == 0:
+                return self._goal_ref(*self.ground_hold)
+            return None   # Modo B: no setpoint during landing
+
+        if sv == self._STANDBY_GROUND:
+            return self._goal_ref(*self.ground_hold)
+
+        return None
+
+    # ── MPC step ─────────────────────────────────────────────────────────────
+    def _run_mpc_step(self, ref):
+        """Run one MPC computation.
+
+        Parameters
+        ----------
+        ref : tuple
+            (X_ref, Xd, Xdd, Y_ref, Yd, Ydd, Z_ref, Zd, Zdd, psi_ref)
+
+        Returns
+        -------
+        AttitudeTarget or None on error.
+        """
+        X_ref, Xd, Xdd, Y_ref, Yd, Ydd, Z_ref, Zd, Zdd, psi_ref = ref
+
+        try:
+            phi_ref, theta_ref, U1_new = self.support.pos_controller(
+                X_ref, Xd, Xdd,
+                Y_ref, Yd, Ydd,
+                Z_ref, Zd, Zdd,
+                psi_ref, self.states)
+        except Exception as exc:
+            self.get_logger().warn(f'pos_controller error: {exc}')
+            return None
+
         U1_new = float(U1_new)
 
-        # 2) Inversão de sinal (se necessário)
         if self.get_parameter('invert_attitude').value:
-            phi_ref = -phi_ref
+            phi_ref   = -phi_ref
             theta_ref = -theta_ref
 
-        # 3) Limite de ângulos (evitar valores extremos)
-        phi_ref = np.clip(phi_ref, -0.7, 0.7)
-        theta_ref = np.clip(theta_ref, -0.7, 0.7)
-        
-        phi_ref = float(phi_ref)
-        theta_ref = float(theta_ref)
-        psi_ref = float(psi_ref)
+        phi_ref   = float(np.clip(phi_ref,   -0.7, 0.7))
+        theta_ref = float(np.clip(theta_ref, -0.7, 0.7))
+        psi_ref   = float(psi_ref)
 
-        # ========== INNER MPC LOOP ==========
-        refSignals = np.array([phi_ref, theta_ref, psi_ref])
-        stacked_ref = np.tile(refSignals, self.hz)
+        ref_signals  = np.array([phi_ref, theta_ref, psi_ref])
+        stacked_ref  = np.tile(ref_signals, self.hz)
 
         for _ in range(self.innerDyn_length):
-            Ad, Bd, Cd, Dd, _, _, _, _, _, _, _, _, _ = self.support.LPV_cont_discrete(self.states, self.omega_total)
-            Hdb, Fdbt, _, _ = self.support.mpc_simplification(Ad, Bd, Cd, Dd, self.hz)
+            try:
+                Ad, Bd, Cd, Dd, *_ = self.support.LPV_cont_discrete(
+                    self.states, self.omega_total)
+                Hdb, Fdbt, _, _ = self.support.mpc_simplification(
+                    Ad, Bd, Cd, Dd, self.hz)
+            except Exception as exc:
+                self.get_logger().warn(f'LPV/MPC error: {exc}')
+                return None
 
-            x_aug_t = np.array([self.states[9], self.states[3], self.states[10],
-                                self.states[4], self.states[11], self.states[5],
-                                self.U2, self.U3, self.U4])
+            x_aug_t  = np.array([
+                self.states[9],  self.states[3],
+                self.states[10], self.states[4],
+                self.states[11], self.states[5],
+                self.U2, self.U3, self.U4])
             extended = np.concatenate((x_aug_t, stacked_ref))
-            ft = extended @ Fdbt
-            du = -np.linalg.inv(Hdb) @ ft.reshape(-1, 1)
+            ft       = extended @ Fdbt
+            du       = -np.linalg.inv(Hdb) @ ft.reshape(-1, 1)
 
-            self.U2 = float(self.U2 + du[0, 0])   # <-- convertido
-            self.U3 = float(self.U3 + du[1, 0])
-            self.U4 = float(self.U4 + du[2, 0])
+            self.U2 = float(np.clip(self.U2 + du[0, 0], -1.0, 1.0))
+            self.U3 = float(np.clip(self.U3 + du[1, 0], -1.0, 1.0))
+            self.U4 = float(np.clip(self.U4 + du[2, 0], -1.0, 1.0))
 
-        # Limite dos torques (adicionar)
-        self.U2 = np.clip(self.U2, -1.0, 1.0)
-        self.U3 = np.clip(self.U3, -1.0, 1.0)
-        self.U4 = np.clip(self.U4, -1.0, 1.0)
-
-        # ========== CONVERTE TORQUES PARA TAXAS DESEJADAS ==========
+        # Convert torques to desired angular-rate commands
         Ix = self.support.constants['Ix']
         Iy = self.support.constants['Iy']
         Iz = self.support.constants['Iz']
         dt = self.Ts
 
-        p_dot_des = self.U2 / Ix
-        q_dot_des = self.U3 / Iy
-        r_dot_des = self.U4 / Iz
+        p_des = float(self.states[3] + (self.U2 / Ix) * dt)
+        q_des = float(self.states[4] + (self.U3 / Iy) * dt)
+        r_des = float(self.states[5] + (self.U4 / Iz) * dt)
 
-        p_des = float(self.states[3] + p_dot_des * dt)   # <-- convertido
-        q_des = float(self.states[4] + q_dot_des * dt)
-        r_des = float(self.states[5] + r_dot_des * dt)
-
-        # ========== PUBLICA COMANDO DE TAXA ==========
         att = AttitudeTarget()
+        att.type_mask        = AttitudeTarget.IGNORE_ATTITUDE
+        att.thrust           = float(np.clip(
+            U1_new / self.support.constants['max_thrust'], 0.0, 1.0))
+        att.body_rate.x      = p_des
+        att.body_rate.y      = q_des
+        att.body_rate.z      = r_des
+        att.orientation.w    = 1.0
+        att.orientation.x    = 0.0
+        att.orientation.y    = 0.0
+        att.orientation.z    = 0.0
+
+        return att
+
+    def _publish_attitude(self, att, now):
+        """Stamp and publish an AttitudeTarget message."""
         att.header.stamp = now.to_msg()
-        # Ignora orientação (usamos apenas taxas)
-        att.type_mask = AttitudeTarget.IGNORE_ATTITUDE
-        att.thrust = np.clip(U1_new / self.support.constants['max_thrust'], 0.0, 1.0)
-        att.body_rate.x = float(p_des)
-        att.body_rate.y = float(q_des)
-        att.body_rate.z = float(r_des)
-
-        # A orientação pode ser qualquer valor (não será usada)
-        att.orientation.w=1.0
-        att.orientation.x=0.0
-        att.orientation.y=0.0
-        att.orientation.z=0.0
-
         self.att_pub.publish(att)
 
-        # Log opcional
-        err_x=X_ref-self.states[6]
-        err_y=Y_ref-self.states[7]
-        err_z=Z_ref-self.states[8]
-        
-        self.get_logger().info(
-            f"\n"
-            f"        | {'X':^12} | {'Y':^12} | {'Z':^12}\n"
-            f"  POS   | {self.states[6]:+12.2f} | {self.states[7]:+12.2f} | {self.states[8]:+12.2f}\n"
-            f"  REF   | {X_ref:+12.2f} | {Y_ref:+12.2f} | {Z_ref:+12.2f}\n"
-            f"  ERR   | {err_x:+12.2f} | {err_y:+12.2f} | {err_z:+12.2f}\n"
-            f"  THRUST: {att.thrust:.5f}",
-            throttle_duration_sec=0.5
-        )
-        
+    def _run_and_publish(self, ref, now):
+        """Run MPC (decimated) and publish, caching result for interim cycles."""
+        if ref is None:
+            return
+
+        if self._cycle_count % self._mpc_decimation == 0:
+            att = self._run_mpc_step(ref)
+            if att is not None:
+                self._hold_cmd = att
+
+        if self._hold_cmd is not None:
+            self._publish_attitude(self._hold_cmd, now)
+
+    # ── FSM per-state handlers ───────────────────────────────────────────────
+    def _fsm_step(self, now):
+        """Dispatch to the appropriate per-state handler."""
+        sv = self.state_voo
+        if sv == self._WAIT_WP:
+            self._state_wait_wp()
+        elif sv == self._TAKEOFF:
+            self._state_takeoff(now)
+        elif sv == self._HOVER:
+            self._state_hover(now)
+        elif sv == self._TRAJECTORY:
+            self._state_trajectory(now)
+        elif sv == self._LANDING:
+            self._state_landing(now)
+        elif sv == self._STANDBY_GROUND:
+            self._state_standby_ground(now)
+
+    def _state_wait_wp(self):
+        if self._cycle_count % 1000 == 0:
+            self.get_logger().info(
+                'WAIT_WP: waiting for waypoint command',
+                throttle_duration_sec=10.0)
+
+    def _state_takeoff(self, now):
+        """State 1: warmup -> OFFBOARD+ARM -> climb -> HOVER."""
+
+        # ── Phase A: warmup ──────────────────────────────────────────────────
+        if self._warmup_counter < self._WARMUP_CYCLES:
+            self._warmup_counter += 1
+            if self._warmup_counter == 1:
+                self.get_logger().info('TAKEOFF: warmup streaming started')
+            # Stream a safe setpoint at current position
+            ref = self._goal_ref(
+                self.states[6], self.states[7], self.states[8])
+            self._run_and_publish(ref, now)
+            return
+
+        # ── Phase B: request OFFBOARD + ARM ─────────────────────────────────
+        if not self.offboard_activated:
+            self.get_logger().info('TAKEOFF: requesting OFFBOARD+ARM')
+            self._request_offboard()
+            self._request_arm()
+            self.offboard_activated = True
+            self.activation_time    = now
+            self.takeoff_counter    = 0
+            return
+
+        # ── Phase C: wait for FCU confirmation ───────────────────────────────
+        if not self.activation_confirmed:
+            if (self.mavros_state.armed
+                    and self.mavros_state.mode == 'OFFBOARD'):
+                self.activation_confirmed = True
+                self.takeoff_counter      = 0
+                self.get_logger().info(
+                    'OFFBOARD+ARM confirmed! Starting climb...')
+            elif (now - self.activation_time).nanoseconds / 1e9 > self.activation_timeout:
+                self.get_logger().warn(
+                    f'OFFBOARD+ARM timeout ({self.activation_timeout:.0f}s)! '
+                    f'armed={self.mavros_state.armed} '
+                    f'mode={self.mavros_state.mode}  – retrying')
+                self.offboard_activated   = False
+                self.activation_confirmed = False
+                self.takeoff_counter      = 0
+                return
+            else:
+                self.get_logger().info(
+                    f'Waiting OFFBOARD+ARM... '
+                    f'armed={self.mavros_state.armed} '
+                    f'mode={self.mavros_state.mode}',
+                    throttle_duration_sec=2.0)
+                # Keep streaming during wait
+                ref = self._goal_ref(
+                    self.states[6], self.states[7], self.states[8])
+                self._run_and_publish(ref, now)
+                return
+
+        # ── Phase D: publish takeoff reference, check arrival ────────────────
+        goal = self.last_waypoint_goal
+        if goal is None:
+            return
+
+        ref = self._goal_ref(goal[0], goal[1], goal[2])
+        self._run_and_publish(ref, now)
+        self.takeoff_counter += 1
+
+        if self.takeoff_counter == 1:
+            self.get_logger().info(
+                f'Climbing to Z={goal[2]:.1f}m  '
+                f'({goal[0]:.2f}, {goal[1]:.2f})')
+
+        if self.takeoff_counter % 100 == 0:
+            self.get_logger().info(
+                f'Takeoff: Z_target={goal[2]:.1f}m  '
+                f'Z_real={self.states[8]:.2f}m  '
+                f't={self.takeoff_counter / 100:.1f}s')
+
+        # Arrival check (ENU: z positive up)
+        if self.states[8] >= goal[2] - self.hover_alt_margin:
+            self.get_logger().info(
+                f'Takeoff complete! Z={self.states[8]:.2f}m -> HOVER')
+            self.takeoff_counter = 0
+            self.state_voo       = self._HOVER
+            # Immediately activate pending trajectory
+            if self.trajectory_waypoints:
+                self.get_logger().info(
+                    'Pending trajectory found -> TRAJECTORY')
+                self.state_voo = self._TRAJECTORY
+
+    def _state_hover(self, now):
+        """State 2: hold goal position, wait for trajectory."""
+        if self.last_waypoint_goal is None:
+            return
+
+        ref = self._goal_ref(*self.last_waypoint_goal)
+        self._run_and_publish(ref, now)
+
+        if self._cycle_count % 500 == 0:
+            gx, gy, gz = self.last_waypoint_goal
+            self.get_logger().info(
+                f'HOVER goal=({gx:.2f},{gy:.2f},{gz:.2f}) '
+                f'z_real={self.states[8]:.2f}',
+                throttle_duration_sec=10.0)
+
+        # Activate trajectory when one arrives
+        if self.trajectory_waypoints and not self.trajectory_started:
+            self.get_logger().info('HOVER -> TRAJECTORY')
+            self.state_voo = self._TRAJECTORY
+
+    def _state_trajectory(self, now):
+        """State 3: discrete-waypoint trajectory execution."""
+        # Landing detection (ENU altitude)
+        z_real = self.states[8]
+        if z_real < self.land_z_threshold:
+            self.get_logger().warn(
+                f'Landing detected during trajectory! z={z_real:.2f}m')
+            if self.last_waypoint_goal is not None:
+                self.ground_hold = [
+                    self.last_waypoint_goal[0],
+                    self.last_waypoint_goal[1],
+                    max(0.01, self.land_z_threshold)]
+            else:
+                self.ground_hold = [
+                    self.states[6], self.states[7],
+                    max(0.01, self.land_z_threshold)]
+            self._initiate_landing()
+            return
+
+        ref = self._trajectory_ref(now)
+        self._run_and_publish(ref, now)
+
+    def _state_landing(self, now):
+        """State 4: wait for landing timeout, then branch on landing_mode."""
+        if self._cycle_count % 500 == 0:
+            self.get_logger().info(
+                'LANDING: waiting for touchdown',
+                throttle_duration_sec=10.0)
+
+        if self.landing_active:
+            if not self.landing_start_time_set:
+                self.landing_start_time     = now
+                self.landing_start_time_set = True
+                self.get_logger().info(
+                    f'Landing timer started ({self.landing_timeout:.0f}s)')
+
+            elapsed = (now - self.landing_start_time).nanoseconds / 1e9
+
+            if elapsed > self.landing_timeout:
+                if self.landing_mode == 0:
+                    # ── Modo A: standby on ground ────────────────────────────
+                    self.landing_active         = False
+                    self.landing_start_time_set = False
+                    self.takeoff_counter        = 0
+                    self.trajectory_waypoints.clear()
+                    self.trajectory_started     = False
+                    self.current_waypoint_idx   = 0
+                    self.ground_hold[2]         = max(0.01, self.land_z_threshold)
+                    self._state5_recovery_time  = now
+                    self.state_voo              = self._STANDBY_GROUND
+                    self.get_logger().warn(
+                        'LANDING -> STANDBY_GROUND (Modo A: keeping OFFBOARD+ARM)')
+                else:
+                    # ── Modo B: disarm, reset to WAIT_WP ────────────────────
+                    self._request_disarm()
+                    self.landing_active         = False
+                    self.landing_start_time_set = False
+                    self.offboard_activated     = False
+                    self.activation_confirmed   = False
+                    self.takeoff_counter        = 0
+                    self.trajectory_waypoints.clear()
+                    self.trajectory_started     = False
+                    self.current_waypoint_idx   = 0
+                    self.last_waypoint_goal     = None
+                    self.state_voo              = self._WAIT_WP
+                    self.get_logger().warn(
+                        'LANDING -> WAIT_WP (Modo B: DISARM requested)')
+                return
+
+        # Modo A: publish ground-hold setpoint to keep OFFBOARD alive
+        if self.landing_mode == 0:
+            ref = self._goal_ref(*self.ground_hold)
+            self._run_and_publish(ref, now)
+
+    def _state_standby_ground(self, now):
+        """State 5 (Modo A): hold on ground OFFBOARD+ARM, wait for flight goal."""
+        # Check OFFBOARD+ARM; attempt recovery if lost
+        if (not self.mavros_state.armed
+                or self.mavros_state.mode != 'OFFBOARD'):
+            elapsed = (now - self._state5_recovery_time).nanoseconds / 1e9
+            if elapsed > self.activation_timeout:
+                self.get_logger().warn(
+                    f'State 5: not OFFBOARD+ARM – retrying '
+                    f'(armed={self.mavros_state.armed} '
+                    f'mode={self.mavros_state.mode})')
+                self._request_offboard()
+                self._request_arm()
+                self._state5_recovery_time = now
+            return
+
+        ref = self._goal_ref(*self.ground_hold)
+        self._run_and_publish(ref, now)
+
+        if self._cycle_count % 500 == 0:
+            gx, gy, gz = self.ground_hold
+            self.get_logger().info(
+                f'STANDBY_GROUND hold=({gx:.2f},{gy:.2f},{gz:.3f})',
+                throttle_duration_sec=10.0)
+
+    # ── Main control loop (100 Hz) ───────────────────────────────────────────
+    def control_loop(self):
+        now = self.get_clock().now()
+        self._cycle_count += 1
+
+        # Gate 1: controller disabled
+        if not self.enabled:
+            self.get_logger().info(
+                'Controller disabled (enabled=false)',
+                throttle_duration_sec=5.0)
+            return
+
+        # Gate 2: external override – freeze FSM but keep setpoint stream alive
+        if self.override_active:
+            if self._hold_cmd is not None:
+                self._publish_attitude(self._hold_cmd, now)
+            self.get_logger().info(
+                'Override active (override_active=true): FSM frozen',
+                throttle_duration_sec=5.0)
+            return
+
+        # Gate 3: odometry not yet received
+        if not self.odom_received:
+            return
+
+        # Run FSM
+        self._fsm_step(now)
+
+        # Periodic diagnostic log
+        if self._cycle_count % 1000 == 0:
+            state_names = ['WAIT_WP', 'TAKEOFF', 'HOVER',
+                           'TRAJECTORY', 'LANDING', 'STANDBY_GROUND']
+            sname = state_names[self.state_voo] if 0 <= self.state_voo <= 5 else '?'
+            ref_pos = self.last_waypoint_goal or [0.0, 0.0, 0.0]
+            self.get_logger().info(
+                f'FSM={sname}({self.state_voo}) '
+                f'pos=({self.states[6]:.2f},{self.states[7]:.2f},{self.states[8]:.2f}) '
+                f'goal=({ref_pos[0]:.2f},{ref_pos[1]:.2f},{ref_pos[2]:.2f}) '
+                f'armed={self.mavros_state.armed} '
+                f'mode={self.mavros_state.mode}'
+            )
+
+
 def main(args=None):
     rclpy.init(args=args)
     node = LPVMPC_Drone()
     rclpy.spin(node)
+
 
 if __name__ == '__main__':
     main()
