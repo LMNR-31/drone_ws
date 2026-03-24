@@ -266,7 +266,7 @@ private:
       {
         if (!(current_state_.armed && current_state_.mode == "OFFBOARD")) {
           RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
-            "⚠️ Não está em OFFBOARD+ARMED (armed=%d mode=%s) — publicando yaw_override mesmo assim (best-effort).",
+            "⚠️ Não está em OFFBOARD+ARMED (armed=%d mode=%s) — iniciando rotação mesmo assim (best-effort).",
             (int)current_state_.armed, current_state_.mode.c_str());
         }
         RCLCPP_INFO(this->get_logger(), "🔄 Iniciando giro %.1f° %s (best-effort).",
@@ -293,6 +293,10 @@ private:
         publishYawOverride(true, yaw_rate_signed_, 0.3f);
 
         const double elapsed = (this->now() - start_time_).seconds();
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+          "🔄 Girando... %.1fs / %.1fs (%.0f%%) armed=%d mode=%s",
+          elapsed, duration_, std::min(elapsed / duration_ * 100.0, 100.0),
+          (int)current_state_.armed, current_state_.mode.c_str());
         if (elapsed >= duration_) {
           RCLCPP_INFO(this->get_logger(), "✅ Giro concluído! (%.1f° %s em %.2fs)",
             angle_ * 180.0 / M_PI, ccw_ ? "CCW" : "CW", elapsed);
