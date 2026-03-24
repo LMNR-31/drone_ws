@@ -36,6 +36,9 @@ public:
     // auto_disable_controller: se true, ativa override_active no controller antes de girar
     // e desativa ao terminar, evitando conflito de setpoints durante o giro.
     this->declare_parameter<bool>("auto_disable_controller", true);
+    // exit_on_finish: se true (padrão), chama rclcpp::shutdown() após o giro.
+    // Se false, retorna a WAIT_OFFBOARD_AND_ARMED para permitir novos giros.
+    this->declare_parameter<bool>("exit_on_finish", true);
 
     uav_ns_                  = this->get_parameter("uav_ns").as_string();
     z_hold_                  = this->get_parameter("z_hold").as_double();
@@ -45,6 +48,7 @@ public:
     ccw_                     = this->get_parameter("ccw").as_bool();
     controller_node_         = this->get_parameter("controller_node").as_string();
     auto_disable_controller_ = this->get_parameter("auto_disable_controller").as_bool();
+    exit_on_finish_          = this->get_parameter("exit_on_finish").as_bool();
 
     if (hz_ <= 0.0) {
       throw std::runtime_error("Parâmetro 'hz' precisa ser > 0");
@@ -77,8 +81,9 @@ public:
         uav_ns_.c_str(), z_hold_, yaw_rate_, angle_, hz_, dir_str, duration_);
     }
     RCLCPP_INFO(this->get_logger(),
-      "Parâmetros: controller_node=%s auto_disable_controller=%s (usa override_active)",
-      controller_node_.c_str(), auto_disable_controller_ ? "true" : "false");
+      "Parâmetros: controller_node=%s auto_disable_controller=%s (usa override_active) exit_on_finish=%s",
+      controller_node_.c_str(), auto_disable_controller_ ? "true" : "false",
+      exit_on_finish_ ? "true" : "false");
 
     // ==========================================
     // PUBLISHERS
@@ -236,6 +241,9 @@ private:
           RCLCPP_INFO(this->get_logger(), "✓ FCU conectada!");
           state_ = StateMachine::WAIT_ODOM;
           state_time_ = this->now();
+        } else {
+          RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+            "⏳ Aguardando conexão FCU... (connected=%d)", (int)current_state_.connected);
         }
         break;
       }
@@ -247,6 +255,9 @@ private:
             current_x_, current_y_, current_z_);
           state_ = StateMachine::WAIT_OFFBOARD_AND_ARMED;
           state_time_ = this->now();
+        } else {
+          RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+            "⏳ Aguardando odom... (odom_received=%d)", (int)odom_received_);
         }
         break;
       }
@@ -269,11 +280,10 @@ private:
 
           start_time_ = this->now();
           state_ = StateMachine::ROTATING;
-        } else if ((this->now() - state_time_).seconds() > 2.0) {
-          RCLCPP_WARN(this->get_logger(),
+        } else {
+          RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
             "⏳ Aguardando OFFBOARD+ARMED... (armed=%d mode=%s)",
             (int)current_state_.armed, current_state_.mode.c_str());
-          state_time_ = this->now();
         }
         break;
       }
@@ -305,8 +315,15 @@ private:
             setControllerOverride(false);
             controller_disabled_ = false;
           }
-          RCLCPP_INFO(this->get_logger(), "Encerrando nó.");
-          rclcpp::shutdown();
+          if (exit_on_finish_) {
+            RCLCPP_INFO(this->get_logger(), "Encerrando nó.");
+            rclcpp::shutdown();
+          } else {
+            RCLCPP_INFO(this->get_logger(),
+              "Giro concluído. Retornando a WAIT_OFFBOARD_AND_ARMED (exit_on_finish=false).");
+            state_ = StateMachine::WAIT_OFFBOARD_AND_ARMED;
+            state_time_ = this->now();
+          }
         }
         break;
       }
@@ -356,6 +373,8 @@ private:
   bool auto_disable_controller_{true};
   // Flag para rastrear se o override foi ativado por este nó (para desativar no destrutor)
   bool controller_disabled_{false};
+  // Se true, chama rclcpp::shutdown() após o giro; se false, retorna a WAIT_OFFBOARD_AND_ARMED
+  bool exit_on_finish_{true};
 
   // yaw_rate com sinal: positivo = CCW, negativo = CW
   double yaw_rate_signed_{0.8};
