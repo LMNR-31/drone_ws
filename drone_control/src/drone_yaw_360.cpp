@@ -264,27 +264,26 @@ private:
 
       case StateMachine::WAIT_OFFBOARD_AND_ARMED:
       {
-        if (current_state_.armed && current_state_.mode == "OFFBOARD") {
-          RCLCPP_INFO(this->get_logger(), "✅ OFFBOARD + ARMED detectado. Iniciando giro %.1f° %s.",
-            angle_ * 180.0 / M_PI, ccw_ ? "anti-horário (CCW)" : "horário (CW)");
-          RCLCPP_INFO(this->get_logger(), "   yaw_rate=%.3f rad/s  duração=%.1fs",
-            yaw_rate_signed_, duration_);
-
-          // Sinaliza ao controller para congelar FSM (ele mesmo captura a posição hold)
-          if (auto_disable_controller_) {
-            RCLCPP_INFO(this->get_logger(),
-              "🔒 Ativando override em '%s' antes do giro (override_active=true)...", controller_node_.c_str());
-            setControllerOverride(true);
-            controller_disabled_ = true;
-          }
-
-          start_time_ = this->now();
-          state_ = StateMachine::ROTATING;
-        } else {
+        if (!(current_state_.armed && current_state_.mode == "OFFBOARD")) {
           RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
-            "⏳ Aguardando OFFBOARD+ARMED... (armed=%d mode=%s)",
+            "⚠️ Não está em OFFBOARD+ARMED (armed=%d mode=%s) — publicando yaw_override mesmo assim (best-effort).",
             (int)current_state_.armed, current_state_.mode.c_str());
         }
+        RCLCPP_INFO(this->get_logger(), "🔄 Iniciando giro %.1f° %s (best-effort).",
+          angle_ * 180.0 / M_PI, ccw_ ? "anti-horário (CCW)" : "horário (CW)");
+        RCLCPP_INFO(this->get_logger(), "   yaw_rate=%.3f rad/s  duração=%.1fs",
+          yaw_rate_signed_, duration_);
+
+        // Sinaliza ao controller para congelar FSM (ele mesmo captura a posição hold)
+        if (auto_disable_controller_) {
+          RCLCPP_INFO(this->get_logger(),
+            "🔒 Ativando override em '%s' antes do giro (override_active=true)...", controller_node_.c_str());
+          setControllerOverride(true);
+          controller_disabled_ = true;
+        }
+
+        start_time_ = this->now();
+        state_ = StateMachine::ROTATING;
         break;
       }
 
