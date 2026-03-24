@@ -852,9 +852,9 @@ class LPVMPC_Drone(Node):
         self.landing_active         = False
         self.landing_start_time_set = False
         self.landing_start_time     = self.get_clock().now()
-        # NED: z is negative when airborne; ground-hold uses a small negative z
-        # so the pos_controller targets a few cm of altitude (not underground).
-        self.ground_hold            = [0.0, 0.0, -max(0.01, self.land_z_threshold)]
+        # ENU: z is positive when airborne; ground-hold uses a small positive z
+        # so the pos_controller targets a few cm of altitude.
+        self.ground_hold            = [0.0, 0.0, max(0.01, self.land_z_threshold)]
 
         # Psi tracking (trajectory, unwrapped)
         self.last_psi_ref = 0.0
@@ -902,21 +902,21 @@ class LPVMPC_Drone(Node):
             f'warmup={self._WARMUP_CYCLES} cycles'
         )
 
-    # ── NED convention helpers ───────────────────────────────────────────────
+    # ── ENU convention helpers ───────────────────────────────────────────────
     @staticmethod
-    def _z_up_to_ned(z_up):
-        """Convert positive-UP altitude to NED z (negative when airborne).
+    def _z_up_to_enu(z_up: float) -> float:
+        """Convert positive-UP altitude to ENU z (positive when airborne).
 
         Incoming waypoints use z as positive altitude (e.g. z=+2.0 → 2 m AGL).
-        Internally the controller uses NED where z is negative when airborne,
-        matching what MAVROS local_position/odom reports.
+        Internally the controller uses ENU where z is positive when airborne,
+        matching what MAVROS local_position/odom reports in PX4 Gazebo Harmonic.
         """
-        return -abs(z_up)
+        return abs(float(z_up))
 
     @staticmethod
-    def _ned_to_alt(z_ned):
-        """Convert NED z to altitude magnitude (always positive)."""
-        return abs(z_ned)
+    def _enu_to_alt(z_enu: float) -> float:
+        """Altitude magnitude for logs (ENU z is already positive-up)."""
+        return max(0.0, float(z_enu))
 
     # ── Dynamic parameter callback ───────────────────────────────────────────
     def _on_params(self, params):
@@ -995,24 +995,24 @@ class LPVMPC_Drone(Node):
                     return
                 self.get_logger().warn(
                     f'LANDING commanded via waypoints! alt={last_z:.2f}m')
-                # NED: small negative z keeps the drone at a few cm of altitude
+                # ENU: small positive z keeps the drone at a few cm of altitude
                 self.ground_hold = [
                     msg.poses[0].position.x,
                     msg.poses[0].position.y,
-                    -max(0.01, self.land_z_threshold)]
+                    max(0.01, self.land_z_threshold)]
                 self._initiate_landing()
             else:
-                # Takeoff / hover command – convert altitude to NED z
-                z_ned = self._z_up_to_ned(msg.poses[0].position.z)
+                # Takeoff / hover command – store altitude as ENU z
+                z_enu = self._z_up_to_enu(msg.poses[0].position.z)
                 self.get_logger().info(
                     f'TAKEOFF/HOVER waypoint: '
                     f'X={msg.poses[0].position.x:.2f} '
                     f'Y={msg.poses[0].position.y:.2f} '
-                    f'alt={last_z:.2f}m (z_ned={z_ned:.2f})')
+                    f'alt={last_z:.2f}m (z_enu={z_enu:.2f})')
                 self.last_waypoint_goal = [
                     msg.poses[0].position.x,
                     msg.poses[0].position.y,
-                    z_ned]
+                    z_enu]
                 self.trajectory_waypoints.clear()
                 self.trajectory_started = False
                 self.current_waypoint_idx = 0
@@ -1026,9 +1026,9 @@ class LPVMPC_Drone(Node):
                 f'(landing/standby ground)')
             return
 
-        # Convert each waypoint's altitude (positive-UP) to NED z (negative)
+        # Store each waypoint's altitude (positive-UP) as ENU z
         self.trajectory_waypoints = [
-            [p.position.x, p.position.y, self._z_up_to_ned(p.position.z)]
+            [p.position.x, p.position.y, self._z_up_to_enu(p.position.z)]
             for p in msg.poses]
         self.trajectory_started   = False
         self.current_waypoint_idx = 0
@@ -1039,7 +1039,7 @@ class LPVMPC_Drone(Node):
         for i, wp in enumerate(self.trajectory_waypoints):
             self.get_logger().info(
                 f'  WP[{i}]: X={wp[0]:.2f} Y={wp[1]:.2f} '
-                f'z_ned={wp[2]:.2f} (alt={self._ned_to_alt(wp[2]):.2f}m)')
+                f'z_enu={wp[2]:.2f} (alt={self._enu_to_alt(wp[2]):.2f}m)')
 
         if self.state_voo == self._HOVER:
             self.state_voo = self._TRAJECTORY
@@ -1053,17 +1053,17 @@ class LPVMPC_Drone(Node):
         """Handle PoseStamped single goal."""
         x = msg.pose.position.x
         y = msg.pose.position.y
-        # Incoming z is positive-UP altitude; convert to NED for internal use.
+        # Incoming z is positive-UP altitude; store as ENU z for internal use.
         z_up = msg.pose.position.z
-        z_ned = self._z_up_to_ned(z_up)
+        z_enu = self._z_up_to_enu(z_up)
 
         # Landing detection while in flight (compare raw altitude)
         if self.state_voo in (self._HOVER, self._TRAJECTORY):
             if z_up < self.land_z_threshold:
                 self.get_logger().warn(
                     f'LANDING via goal! alt={z_up:.2f}m')
-                # NED: small negative z keeps pos_controller at a few cm altitude
-                self.ground_hold = [x, y, -max(0.01, self.land_z_threshold)]
+                # ENU: small positive z keeps pos_controller at a few cm altitude
+                self.ground_hold = [x, y, max(0.01, self.land_z_threshold)]
                 self._initiate_landing()
                 return
 
@@ -1084,8 +1084,8 @@ class LPVMPC_Drone(Node):
             if z_up >= self.land_z_threshold:
                 self.get_logger().info(
                     f'[State 5] Flight waypoint received, resuming: '
-                    f'X={x:.2f} Y={y:.2f} alt={z_up:.2f}m (z_ned={z_ned:.2f})')
-                self.last_waypoint_goal   = [x, y, z_ned]
+                    f'X={x:.2f} Y={y:.2f} alt={z_up:.2f}m (z_enu={z_enu:.2f})')
+                self.last_waypoint_goal   = [x, y, z_enu]
                 self.trajectory_waypoints.clear()
                 self.trajectory_started   = False
                 self.current_waypoint_idx = 0
@@ -1097,16 +1097,16 @@ class LPVMPC_Drone(Node):
                     throttle_duration_sec=5.0)
             return
 
-        # State 3 (trajectory): store as override setpoint (NED z)
+        # State 3 (trajectory): store as override setpoint (ENU z)
         if self.state_voo == self._TRAJECTORY:
-            self.last_waypoint_goal = [x, y, z_ned]
+            self.last_waypoint_goal = [x, y, z_enu]
             return
 
-        # Normal: update goal (store NED z)
-        self.last_waypoint_goal = [x, y, z_ned]
+        # Normal: update goal (store ENU z)
+        self.last_waypoint_goal = [x, y, z_enu]
         self.get_logger().info(
             f'Waypoint goal updated: X={x:.2f} Y={y:.2f} '
-            f'alt={z_up:.2f}m (z_ned={z_ned:.2f})')
+            f'alt={z_up:.2f}m (z_enu={z_enu:.2f})')
 
     # ── FSM helpers ──────────────────────────────────────────────────────────
     def _initiate_landing(self):
@@ -1280,9 +1280,9 @@ class LPVMPC_Drone(Node):
             pct = (elapsed / total * 100.0) if total > 0 else 0.0
             self.get_logger().info(
                 f'TRAJECTORY WP[{idx}/{len(self.trajectory_waypoints)-1}] '
-                f'X={wp[0]:.2f} Y={wp[1]:.2f} z_ned={wp[2]:.2f} '
-                f'z_ned_real={self.states[8]:.2f} '
-                f'alt={self._ned_to_alt(self.states[8]):.2f}m {pct:.1f}%')
+                f'X={wp[0]:.2f} Y={wp[1]:.2f} z_enu={wp[2]:.2f} '
+                f'z_enu_real={self.states[8]:.2f} '
+                f'alt={self._enu_to_alt(self.states[8]):.2f}m {pct:.1f}%')
 
         # Check completion
         if elapsed >= total:
@@ -1325,7 +1325,7 @@ class LPVMPC_Drone(Node):
         ----------
         ref : tuple
             (X_ref, Xd, Xdd, Y_ref, Yd, Ydd, Z_ref, Zd, Zdd, psi_ref)
-            Z_ref/Zd/Zdd are in NED (negative when airborne).
+            Z_ref/Zd/Zdd are in ENU (positive when airborne).
 
         Returns
         -------
@@ -1333,20 +1333,15 @@ class LPVMPC_Drone(Node):
         """
         X_ref, Xd, Xdd, Y_ref, Yd, Ydd, Z_ref, Zd, Zdd, psi_ref = ref
 
-        # pos_controller() was designed with altitude-up (ENU) convention:
-        #   U1 = (vz + g) * m  →  for hover vz≈0, U1≈mg (correct only when
-        #   z is positive-up).  Internal state and all references use NED
-        #   (z negative when airborne).  Convert z-axis quantities to
-        #   altitude-up just for this call; everything else stays in NED.
-        states_enu = self.states.copy()
-        states_enu[2] = -self.states[2]   # w: NED body-z  → ENU body-z
-        states_enu[8] = -self.states[8]   # position z: NED → altitude-up
+        # Internal convention is ENU (z up). pos_controller expects ENU too.
+        # No z-axis sign conversion needed.
+        states_enu = self.states
 
         try:
             phi_ref, theta_ref, U1_new = self.support.pos_controller(
                 X_ref, Xd, Xdd,
                 Y_ref, Yd, Ydd,
-                -Z_ref, -Zd, -Zdd,   # NED z → altitude-up for pos_controller
+                Z_ref, Zd, Zdd,
                 psi_ref, states_enu)
         except Exception as exc:
             self.get_logger().warn(f'pos_controller error: {exc}')
@@ -1517,23 +1512,22 @@ class LPVMPC_Drone(Node):
 
         if self.takeoff_counter == 1:
             self.get_logger().info(
-                f'Climbing to alt={self._ned_to_alt(goal[2]):.1f}m '
-                f'(z_ned={goal[2]:.2f})  '
+                f'Climbing to alt={self._enu_to_alt(goal[2]):.1f}m '
+                f'(z_enu={goal[2]:.2f})  '
                 f'({goal[0]:.2f}, {goal[1]:.2f})')
 
         if self.takeoff_counter % 100 == 0:
             self.get_logger().info(
-                f'Takeoff: alt_target={self._ned_to_alt(goal[2]):.1f}m  '
-                f'alt_real={self._ned_to_alt(self.states[8]):.2f}m  '
-                f'z_ned={self.states[8]:.2f}m  '
+                f'Takeoff: alt_target={self._enu_to_alt(goal[2]):.1f}m  '
+                f'alt_real={self._enu_to_alt(self.states[8]):.2f}m  '
+                f'z_enu={self.states[8]:.2f}m  '
                 f't={self.takeoff_counter / 100:.1f}s')
 
-        # Arrival check (NED: both states[8] and goal[2] are negative when
-        # airborne; compare altitude magnitudes so the sign does not matter).
-        if self._ned_to_alt(self.states[8]) >= self._ned_to_alt(goal[2]) - self.hover_alt_margin:
+        # Arrival check (ENU: both states[8] and goal[2] are positive when airborne)
+        if self.states[8] >= goal[2] - self.hover_alt_margin:
             self.get_logger().info(
                 f'Takeoff complete! '
-                f'alt={self._ned_to_alt(self.states[8]):.2f}m -> HOVER')
+                f'alt={self._enu_to_alt(self.states[8]):.2f}m -> HOVER')
             self.takeoff_counter = 0
             self.state_voo       = self._HOVER
             # Immediately activate pending trajectory
@@ -1554,8 +1548,8 @@ class LPVMPC_Drone(Node):
             gx, gy, gz = self.last_waypoint_goal
             self.get_logger().info(
                 f'HOVER goal=({gx:.2f},{gy:.2f}) '
-                f'alt_target={self._ned_to_alt(gz):.2f}m z_ned_ref={gz:.2f} '
-                f'z_ned={self.states[8]:.2f} alt={self._ned_to_alt(self.states[8]):.2f}m',
+                f'alt_target={self._enu_to_alt(gz):.2f}m z_enu_ref={gz:.2f} '
+                f'z_enu={self.states[8]:.2f} alt={self._enu_to_alt(self.states[8]):.2f}m',
                 throttle_duration_sec=10.0)
 
         # Activate trajectory when one arrives
@@ -1565,21 +1559,21 @@ class LPVMPC_Drone(Node):
 
     def _state_trajectory(self, now):
         """State 3: discrete-waypoint trajectory execution."""
-        # Landing detection (NED: z_ned is negative when airborne, near 0 on ground)
-        z_ned = self.states[8]
-        if self._ned_to_alt(z_ned) < self.land_z_threshold:
+        # Landing detection (ENU: z is positive when airborne, near 0 on ground)
+        z_enu = self.states[8]
+        if z_enu < self.land_z_threshold:
             self.get_logger().warn(
                 f'Landing detected during trajectory! '
-                f'z_ned={z_ned:.2f}m alt={self._ned_to_alt(z_ned):.2f}m')
+                f'z_enu={z_enu:.2f}m alt={self._enu_to_alt(z_enu):.2f}m')
             if self.last_waypoint_goal is not None:
                 self.ground_hold = [
                     self.last_waypoint_goal[0],
                     self.last_waypoint_goal[1],
-                    -max(0.01, self.land_z_threshold)]
+                    max(0.01, self.land_z_threshold)]
             else:
                 self.ground_hold = [
                     self.states[6], self.states[7],
-                    -max(0.01, self.land_z_threshold)]
+                    max(0.01, self.land_z_threshold)]
             self._initiate_landing()
             return
 
@@ -1611,8 +1605,8 @@ class LPVMPC_Drone(Node):
                     self.trajectory_waypoints.clear()
                     self.trajectory_started     = False
                     self.current_waypoint_idx   = 0
-                    # NED: negative z keeps pos_controller at a few cm altitude
-                    self.ground_hold[2]         = -max(0.01, self.land_z_threshold)
+                    # ENU: positive z keeps pos_controller at a few cm altitude
+                    self.ground_hold[2]         = max(0.01, self.land_z_threshold)
                     self._state5_recovery_time  = now
                     self.state_voo              = self._STANDBY_GROUND
                     self.get_logger().warn(
@@ -1662,7 +1656,7 @@ class LPVMPC_Drone(Node):
             gx, gy, gz = self.ground_hold
             self.get_logger().info(
                 f'STANDBY_GROUND hold=({gx:.2f},{gy:.2f}) '
-                f'z_ned={gz:.3f} alt={self._ned_to_alt(gz):.3f}m',
+                f'z_enu={gz:.3f} alt={self._enu_to_alt(gz):.3f}m',
                 throttle_duration_sec=10.0)
 
     # ── Main control loop (100 Hz) ───────────────────────────────────────────
@@ -1702,9 +1696,9 @@ class LPVMPC_Drone(Node):
             self.get_logger().info(
                 f'FSM={sname}({self.state_voo}) '
                 f'pos=({self.states[6]:.2f},{self.states[7]:.2f}) '
-                f'z_ned={self.states[8]:.2f} alt={self._ned_to_alt(self.states[8]):.2f}m '
+                f'z_enu={self.states[8]:.2f} alt={self._enu_to_alt(self.states[8]):.2f}m '
                 f'goal=({ref_pos[0]:.2f},{ref_pos[1]:.2f}) '
-                f'z_ned_ref={ref_pos[2]:.2f} '
+                f'z_enu_ref={ref_pos[2]:.2f} '
                 f'armed={self.mavros_state.armed} '
                 f'mode={self.mavros_state.mode}'
             )
