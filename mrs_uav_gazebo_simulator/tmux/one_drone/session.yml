@@ -66,8 +66,7 @@ windows:
           waitForGazebo; sleep 5
           waitForPX4; sleep 2
           source ~/ros2_ws/install/setup.bash
-          ros2 run my_drone_controller drone_node --ros-args --params-file "$DRONE_CONFIG"  2>&1 | tee -a /tmp/drone_logs/drone_controller_$(date +%Y%m%d_%H%M%S).log 
-          ros2 launch my_drone_controller drone_controller.launch.py
+          ros2 run drone_custom_control lpv_mpc_drone_node --ros-args -p uav_name:=$UAV_NAME -p invert_attitude:=false -p enabled:=true 2>&1 | tee -a /tmp/drone_logs/lpv_mpc_drone_node_$(date +%Y%m%d_%H%M%S).log
   # ── 7. Debug console ───────────────────────────────────────────────────────
   - debug_console:
       layout: tiled
