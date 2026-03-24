@@ -968,12 +968,34 @@ class LPVMPC_Drone(Node):
         psi   = np.arctan2(
             2*(qw[3]*qw[2] + qw[0]*qw[1]),
             1 - 2*(qw[1]**2 + qw[2]**2))
+
+        # MAVROS reports twist.twist.linear in the world/map frame (frame_id).
+        # pos_controller expects body-frame velocities [u, v, w].
+        # Build the body->world rotation matrix (ZYX order, same convention as
+        # the rest of this file) and apply its transpose to convert world->body.
+        cp, sp = np.cos(phi), np.sin(phi)
+        ct, st = np.cos(theta), np.sin(theta)
+        cs, ss = np.cos(psi), np.sin(psi)
+        R_x = np.array([[1, 0, 0], [0, cp, -sp], [0, sp, cp]])
+        R_y = np.array([[ct, 0, st], [0, 1, 0], [-st, 0, ct]])
+        R_z = np.array([[cs, -ss, 0], [ss, cs, 0], [0, 0, 1]])
+        R_body_to_world = np.matmul(R_z, np.matmul(R_y, R_x))
+        v_world = np.array([v.x, v.y, v.z])
+        u_b, v_b, w_b = np.matmul(R_body_to_world.T, v_world)
+
         self.states = np.array([
-            v.x, v.y, v.z,
+            u_b, v_b, w_b,
             w.x, w.y, w.z,
             p.x, p.y, p.z,
             phi, theta, psi])
         self.odom_received = True
+
+        # Log frame ids once every 10 s to make the velocity-frame convention
+        # explicit and avoid future ambiguity.
+        self.get_logger().info(
+            f"odom frames: frame_id={msg.header.frame_id!r} "
+            f"child_frame_id={msg.child_frame_id!r}",
+            throttle_duration_sec=10.0)
 
     def _waypoints_cb(self, msg):
         """Handle PoseArray: 1 pose = takeoff/land, 2+ = trajectory."""
