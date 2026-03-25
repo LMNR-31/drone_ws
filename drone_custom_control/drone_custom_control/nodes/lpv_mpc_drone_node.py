@@ -1021,10 +1021,10 @@ class LPVMPC_Drone(Node):
 
         # Detect disarm: if was armed and now disarmed while in WAIT_WP, unlock z0
         if prev and not armed_now and self.state_voo == self._WAIT_WP:
-            if self._z0_map_locked:
-                self.get_logger().info(
-                    f'Disarmed in WAIT_WP -> unlocking _z0_map '
-                    f'(state={self.state_voo} armed={armed_now} z0={self._z0_map})')
+            self.get_logger().info(
+                f'Disarmed in WAIT_WP -> unlocking _z0_map '
+                f'(was_locked={self._z0_map_locked} state={self.state_voo} '
+                f'armed={armed_now} z0={self._z0_map})')
             self._z0_map_locked = False
 
         # Detect first arm transition: lock _z0_map once vehicle arms
@@ -1666,22 +1666,19 @@ class LPVMPC_Drone(Node):
         # Condition B: minimum safe altitude reached
         cond_b = alt_rel >= self.min_takeoff_alt_rel
 
-        # Throttled debug log every 2 s (200 cycles at 100 Hz)
-        if self.takeoff_counter % 200 == 0:
-            self.get_logger().info(
-                f'Takeoff: alt_target={self._enu_to_alt(goal[2]):.1f}m  '
-                f'alt_rel={alt_rel:.2f}m  '
-                f'z_enu={self.states[8]:.2f}m  '
-                f'goal_alt_rel={goal_alt_rel:.2f}m  '
-                f'_z0_map={self._z0_map}  '
-                f'condA={cond_a} condB={cond_b}  '
-                f't={self.takeoff_counter / 100:.1f}s')
-        elif self.takeoff_counter % 100 == 0:
-            self.get_logger().info(
+        # Throttled debug log every 2 s (200 cycles at 100 Hz); 1 s otherwise
+        if self.takeoff_counter % 100 == 0:
+            base_msg = (
                 f'Takeoff: alt_target={self._enu_to_alt(goal[2]):.1f}m  '
                 f'alt_rel={alt_rel:.2f}m  '
                 f'z_enu={self.states[8]:.2f}m  '
                 f't={self.takeoff_counter / 100:.1f}s')
+            if self.takeoff_counter % 200 == 0:
+                base_msg += (
+                    f'  goal_alt_rel={goal_alt_rel:.2f}m'
+                    f'  _z0_map={self._z0_map}'
+                    f'  condA={cond_a} condB={cond_b}')
+            self.get_logger().info(base_msg)
 
         # Arrival check: Condition C – A and B must both hold continuously
         # for takeoff_complete_hold_time seconds before switching to HOVER.
