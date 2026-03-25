@@ -67,7 +67,18 @@ windows:
           waitForPX4; sleep 2
           source ~/ros2_ws/install/setup.bash
           ros2 run drone_custom_control lpv_mpc_drone_node --ros-args -p uav_name:=$UAV_NAME -p invert_attitude:=false -p enabled:=true 2>&1 | tee -a /tmp/drone_logs/lpv_mpc_drone_node_$(date +%Y%m%d_%H%M%S).log
-  # ── 7. Debug console ───────────────────────────────────────────────────────
+
+  # ── 7. Hover supervisor (persistent setpoint streamer) ─────────────────────
+  - hover_supervisor:
+      layout: tiled
+      panes:
+        - |
+          waitForGazebo; sleep 5
+          waitForPX4; sleep 2
+          source ~/ros2_ws/install/setup.bash
+          ros2 run drone_custom_control hover_supervisor_node --ros-args -p uav_name:=$UAV_NAME 2>&1 | tee -a /tmp/drone_logs/hover_supervisor_node_$(date +%Y%m%d_%H%M%S).log
+
+  # ── 8. Debug console ───────────────────────────────────────────────────────
   - debug_console:
       layout: tiled
       panes:
@@ -86,6 +97,6 @@ windows:
           source ~/ros2_ws/install/setup.bash
           bash
 
-  # ── 8-9. Free terminals ────────────────────────────────────────────────────
+  # ── 9-10. Free terminals ───────────────────────────────────────────────────
   - terminal1:
   - terminal2:
