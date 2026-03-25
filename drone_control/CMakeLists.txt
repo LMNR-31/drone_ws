@@ -14,11 +14,15 @@ find_package(mrs_msgs REQUIRED)
 find_package(mavros_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(tf2 REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 # Generate custom messages
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/YawOverride.msg"
+  "msg/Waypoint4D.msg"
+  "msg/Waypoint4DArray.msg"
+  DEPENDENCIES geometry_msgs std_msgs
 )
 
 ament_export_dependencies(rosidl_default_runtime)

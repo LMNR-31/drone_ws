@@ -66,9 +66,7 @@ windows:
           waitForGazebo; sleep 5
           waitForPX4; sleep 2
           source ~/ros2_ws/install/setup.bash
-          ros2 run drone_custom_control lpv_mpc_drone_node --ros-args \
-            -p uav_name:=$UAV_NAME \
-            -p auto_arm_handoff:=true
+          ros2 run my_drone_controller drone_node 2>&1 | tee -a /tmp/drone_logs/drone_controller_$(date +%Y%m%d_%H%M%S).log
 
   # ── 7. Hover supervisor (persistent setpoint streamer) ─────────────────────
   - hover_supervisor:

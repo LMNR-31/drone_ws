@@ -8,6 +8,8 @@
 #include "mavros_msgs/msg/position_target.hpp"
 #include "rcl_interfaces/msg/set_parameters_result.hpp"
 #include "drone_control/msg/yaw_override.hpp"
+#include "drone_control/msg/waypoint4_d.hpp"
+#include "drone_control/msg/waypoint4_d_array.hpp"
 #include "drone_config.h"
 #include <vector>
 #include <cmath>
@@ -337,6 +339,10 @@ public:
   static constexpr uint16_t MASK_POS_YAWRATE =
     IGNORE_VX | IGNORE_VY | IGNORE_VZ | IGNORE_AFX | IGNORE_AFY | IGNORE_AFZ | IGNORE_YAW;
 
+  // Position + absolute yaw; ignore velocity, acceleration, yaw_rate
+  static constexpr uint16_t MASK_POS_YAW =
+    IGNORE_VX | IGNORE_VY | IGNORE_VZ | IGNORE_AFX | IGNORE_AFY | IGNORE_AFZ | IGNORE_YAW_RATE;
+
   // Position only; ignore velocity, acceleration, yaw angle and yaw_rate
   static constexpr uint16_t MASK_POS_ONLY = MASK_POS_YAWRATE | IGNORE_YAW_RATE;
 
@@ -446,7 +452,15 @@ public:
       "/uav1/yaw_override/cmd", 10,
       std::bind(&DroneControllerCompleto::yaw_override_callback, this, std::placeholders::_1));
 
-    RCLCPP_INFO(this->get_logger(), "✓ Subscribers criados: /uav1/mavros/state, /waypoints, /waypoint_goal, odometria e /uav1/yaw_override/cmd");
+    waypoint_goal_4d_sub_ = this->create_subscription<drone_control::msg::Waypoint4D>(
+      "/waypoint_goal_4d", 1,
+      std::bind(&DroneControllerCompleto::waypoint_goal_4d_callback, this, std::placeholders::_1));
+
+    waypoints_4d_sub_ = this->create_subscription<drone_control::msg::Waypoint4DArray>(
+      "/waypoints_4d", 1,
+      std::bind(&DroneControllerCompleto::waypoints_4d_callback, this, std::placeholders::_1));
+
+    RCLCPP_INFO(this->get_logger(), "✓ Subscribers criados: /uav1/mavros/state, /waypoints, /waypoint_goal, odometria, /uav1/yaw_override/cmd, /waypoint_goal_4d e /waypoints_4d");
 
     // ==========================================
     // SERVICE CLIENTS - ATIVAÇÃO
@@ -520,6 +534,10 @@ public:
     ground_hold_y_ = 0.0;
     ground_hold_z_ = std::max(0.01, config_.land_z_threshold);
     state5_recovery_time_ = this->now();
+    current_yaw_rad_ = 0.0;
+    goal_yaw_rad_ = 0.0;
+    using_4d_goal_ = false;
+    trajectory_4d_mode_ = false;
 
     RCLCPP_INFO(this->get_logger(), "\n📊 STATUS INICIAL:");
     RCLCPP_INFO(this->get_logger(), "   Estado: %d (aguardando waypoint)", state_voo_);
@@ -762,6 +780,11 @@ private:
     current_y_ned_ = msg->pose.pose.position.y;
     current_z_ned_ = msg->pose.pose.position.z;
     current_z_real_ = std::abs(current_z_ned_);
+    // Extrair yaw do quaternion do odom (wrap para [-pi, pi])
+    const auto & q = msg->pose.pose.orientation;
+    current_yaw_rad_ = std::atan2(
+      2.0 * (q.w * q.z + q.x * q.y),
+      1.0 - 2.0 * (q.y * q.y + q.z * q.z));
   }
 
   // ==========================================
@@ -801,6 +824,8 @@ private:
   void waypoints_callback(const geometry_msgs::msg::PoseArray::SharedPtr msg) {
     std::lock_guard<std::mutex> lock(mutex_);
 
+    // Quando recebe trajetória 3D, limpa o modo 4D
+    trajectory_4d_mode_ = false;
     // ✅ VALIDAÇÃO: Mínimo 1 waypoint
     if (msg->poses.size() < 1) {
       RCLCPP_WARN(this->get_logger(), "❌ Waypoints insuficientes: %zu", msg->poses.size());
@@ -937,6 +962,7 @@ private:
 
       // SEMPRE armazena waypoints (mesmo se ESTADO != 2)
       trajectory_waypoints_ = msg->poses;
+      trajectory_yaws_.clear();  // 3D: sem yaws por waypoint
       current_waypoint_idx_ = 0;
       trajectory_started_ = false;
       last_waypoint_goal_.pose = msg->poses[0];
@@ -998,6 +1024,8 @@ private:
   void waypoint_goal_callback(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
     std::lock_guard<std::mutex> lock(mutex_);
 
+    // Quando recebe waypoint 3D, limpa o modo 4D
+    using_4d_goal_ = false;
     // ✅ VALIDAÇÃO: Rejeita coordenadas inválidas antes de qualquer uso
     if (!validate_waypoint(*msg, config_)) {
       RCLCPP_WARN(this->get_logger(),
@@ -1117,8 +1145,285 @@ private:
   }
 
   // ==========================================
-  // HELPER: PUBLICAR POSITION TARGET
+  // CALLBACK: WAYPOINT 4D ÚNICO (Waypoint4D)
+  // Suporta posição + yaw absoluto opcional.
+  // yaw=NaN → mantém yaw atual do drone.
   // ==========================================
+  void waypoint_goal_4d_callback(const drone_control::msg::Waypoint4D::SharedPtr msg) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    // Valida posição
+    geometry_msgs::msg::PoseStamped ps;
+    ps.pose = msg->pose;
+    if (!validate_waypoint(ps, config_)) {
+      RCLCPP_WARN(this->get_logger(),
+        "❌ waypoint_goal_4d inválido (NaN/Inf ou fora dos limites físicos) - ignorado");
+      return;
+    }
+
+    // Determina o yaw alvo: NaN → usa yaw atual; caso contrário normaliza para [-pi, pi]
+    if (std::isnan(static_cast<double>(msg->yaw))) {
+      goal_yaw_rad_ = current_yaw_rad_;
+      RCLCPP_INFO(this->get_logger(),
+        "📍 4D Waypoint: yaw=NaN → usando yaw atual (%.3f rad)", goal_yaw_rad_);
+    } else {
+      double raw_yaw = static_cast<double>(msg->yaw);
+      goal_yaw_rad_ = std::atan2(std::sin(raw_yaw), std::cos(raw_yaw));
+      RCLCPP_INFO(this->get_logger(),
+        "📍 4D Waypoint: yaw=%.3f rad (normalizado para %.3f rad)", raw_yaw, goal_yaw_rad_);
+    }
+
+    using_4d_goal_ = true;
+    trajectory_4d_mode_ = false;
+
+    // Delegate a lógica de estado ao waypoint_goal_callback existente via PoseStamped
+    auto pose_stamped = std::make_shared<geometry_msgs::msg::PoseStamped>();
+    pose_stamped->pose = msg->pose;
+    pose_stamped->header.stamp = this->now();
+    pose_stamped->header.frame_id = "map";
+
+    // Extrai coordenadas e replica a lógica do waypoint_goal_callback
+    double x = pose_stamped->pose.position.x;
+    double y = pose_stamped->pose.position.y;
+    double z = pose_stamped->pose.position.z;
+    last_z_ = z;
+
+    // Detecta pouso (só em voo)
+    if ((state_voo_ == 2 || state_voo_ == 3) && z < config_.land_z_threshold) {
+      pouso_em_andamento_ = true;
+      controlador_ativo_ = false;
+      state_voo_ = 4;
+      land_cmd_id_ = cmd_queue_.enqueue(CommandType::LAND, {{"z", std::to_string(z)}});
+      RCLCPP_WARN(this->get_logger(),
+        "🛬 [ID=%lu] 4D POUSO DETECTADO! Z = %.2f m - Comando LAND enfileirado",
+        *land_cmd_id_, z);
+      ground_hold_x_ = x;
+      ground_hold_y_ = y;
+      ground_hold_z_ = std::max(0.01, config_.land_z_threshold);
+      return;
+    }
+
+    // Estado 4: aguarda desarme
+    if (state_voo_ == 4) {
+      if (!current_state_.armed) {
+        offboard_activated_ = false;
+        activation_confirmed_ = false;
+        state_voo_ = 0;
+        takeoff_counter_ = 0;
+        pouso_em_andamento_ = false;
+      }
+      return;
+    }
+
+    // Estado 5: aceita waypoints de voo para sair do standby
+    if (state_voo_ == 5) {
+      if (z >= config_.land_z_threshold) {
+        RCLCPP_INFO(this->get_logger(),
+          "\n📍 [ESTADO 5] 4D WAYPOINT DE VÔO: X=%.2f, Y=%.2f, Z=%.2f yaw=%.3f rad – saindo do standby\n",
+          x, y, z, goal_yaw_rad_);
+        last_waypoint_goal_ = *pose_stamped;
+        waypoint_goal_received_ = true;
+        pouso_em_andamento_ = false;
+        controlador_ativo_ = false;
+        trajectory_started_ = false;
+        trajectory_waypoints_.clear();
+        current_waypoint_idx_ = 0;
+        if (current_state_.armed && current_state_.mode == "OFFBOARD") {
+          // já ativado
+        } else {
+          offboard_activated_ = false;
+          activation_confirmed_ = false;
+          request_offboard();
+          request_arm();
+          offboard_activated_ = true;
+          activation_time_ = this->now();
+        }
+        takeoff_cmd_id_ = cmd_queue_.enqueue(
+          CommandType::TAKEOFF,
+          {{"x", std::to_string(x)}, {"y", std::to_string(y)},
+           {"z", std::to_string(config_.hover_altitude)}});
+        RCLCPP_INFO(this->get_logger(),
+          "📋 [ID=%lu] 4D Comando TAKEOFF enfileirado (saída do estado 5)", *takeoff_cmd_id_);
+        state_voo_ = 1;
+        takeoff_counter_ = 0;
+      } else {
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+          "ℹ️ [ESTADO 5] 4D Waypoint de pouso ignorado (drone já no chão)");
+      }
+      return;
+    }
+
+    // Estado 3: atualiza setpoint relativo
+    if (state_voo_ == 3) {
+      trajectory_setpoint_[0] = x;
+      trajectory_setpoint_[1] = y;
+      trajectory_setpoint_[2] = z;
+      controlador_ativo_ = true;
+      pouso_em_andamento_ = false;
+      return;
+    }
+
+    RCLCPP_INFO(this->get_logger(),
+      "\n📍 4D WAYPOINT RECEBIDO: X=%.2f, Y=%.2f, Z=%.2f, yaw=%.3f rad",
+      x, y, z, goal_yaw_rad_);
+
+    last_waypoint_goal_ = *pose_stamped;
+    waypoint_goal_received_ = true;
+    controlador_ativo_ = true;
+    pouso_em_andamento_ = false;
+  }
+
+  // ==========================================
+  // CALLBACK: TRAJETÓRIA 4D (Waypoint4DArray)
+  // Suporta múltiplos waypoints com yaw opcional.
+  // yaw=NaN em cada ponto → usa yaw atual do drone naquele instante.
+  // ==========================================
+  void waypoints_4d_callback(const drone_control::msg::Waypoint4DArray::SharedPtr msg) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (msg->waypoints.size() < 1) {
+      RCLCPP_WARN(this->get_logger(),
+        "❌ Waypoints4D insuficientes: %zu", msg->waypoints.size());
+      return;
+    }
+
+    // Valida cada waypoint
+    for (size_t i = 0; i < msg->waypoints.size(); ++i) {
+      geometry_msgs::msg::PoseStamped ps;
+      ps.pose = msg->waypoints[i].pose;
+      if (!validate_waypoint(ps, config_)) {
+        RCLCPP_WARN(this->get_logger(),
+          "❌ Waypoint4D[%zu] inválido (NaN/Inf ou fora dos limites físicos) - mensagem ignorada", i);
+        return;
+      }
+    }
+
+    // Extrai poses e yaws.
+    // Nota: yaw=NaN é resolvido no momento da recepção da mensagem,
+    // usando current_yaw_rad_ (heading atual do drone). Todos os waypoints NaN
+    // da mesma trajetória receberão o mesmo heading de referência.
+    std::vector<geometry_msgs::msg::Pose> poses;
+    std::vector<double> yaws;
+    poses.reserve(msg->waypoints.size());
+    yaws.reserve(msg->waypoints.size());
+    for (const auto & wp : msg->waypoints) {
+      poses.push_back(wp.pose);
+      if (std::isnan(static_cast<double>(wp.yaw))) {
+        yaws.push_back(current_yaw_rad_);  // mantém yaw atual do drone
+      } else {
+        double raw_yaw = static_cast<double>(wp.yaw);
+        yaws.push_back(std::atan2(std::sin(raw_yaw), std::cos(raw_yaw)));
+      }
+    }
+
+    double last_z = poses.back().position.z;
+
+    // Detecta pouso (1 waypoint com Z baixo)
+    if (msg->waypoints.size() == 1 && last_z < config_.land_z_threshold) {
+      if (state_voo_ == 5) {
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+          "ℹ️ 4D Comando de pouso ignorado: drone já em standby no chão (estado 5)");
+        return;
+      }
+      RCLCPP_WARN(this->get_logger(), "\n🛬🛬🛬 4D POUSO DETECTADO! Z_final = %.2f m", last_z);
+      pouso_em_andamento_ = true;
+      controlador_ativo_ = false;
+      state_voo_ = 4;
+      land_cmd_id_ = cmd_queue_.enqueue(CommandType::LAND, {{"z", std::to_string(last_z)}});
+      ground_hold_x_ = poses[0].position.x;
+      ground_hold_y_ = poses[0].position.y;
+      ground_hold_z_ = std::max(0.01, config_.land_z_threshold);
+      trajectory_4d_mode_ = false;
+      return;
+    }
+
+    // 1 waypoint de voo = levantamento
+    if (msg->waypoints.size() == 1) {
+      RCLCPP_INFO(this->get_logger(), "\n⬆️ 4D WAYPOINT DE LEVANTAMENTO recebido: X=%.2f Y=%.2f Z=%.2f yaw=%.3f rad",
+        poses[0].position.x, poses[0].position.y, poses[0].position.z, yaws[0]);
+
+      goal_yaw_rad_ = yaws[0];
+      using_4d_goal_ = true;
+      trajectory_4d_mode_ = false;
+
+      geometry_msgs::msg::PoseStamped ps;
+      ps.pose = poses[0];
+      last_waypoint_goal_ = ps;
+
+      pouso_em_andamento_ = false;
+      controlador_ativo_ = false;
+      trajectory_started_ = false;
+      trajectory_waypoints_.clear();
+      trajectory_yaws_.clear();
+      current_waypoint_idx_ = 0;
+
+      if (state_voo_ == 5 && current_state_.armed && current_state_.mode == "OFFBOARD") {
+        // reutiliza ativação
+      } else {
+        offboard_activated_ = false;
+        activation_confirmed_ = false;
+        request_offboard();
+        request_arm();
+        offboard_activated_ = true;
+        activation_time_ = this->now();
+      }
+      takeoff_cmd_id_ = cmd_queue_.enqueue(
+        CommandType::TAKEOFF,
+        {{"x", std::to_string(poses[0].position.x)},
+         {"y", std::to_string(poses[0].position.y)},
+         {"z", std::to_string(config_.hover_altitude)}});
+      state_voo_ = 1;
+      takeoff_counter_ = 0;
+      return;
+    }
+
+    // 2+ waypoints = trajetória 4D
+    if (state_voo_ == 4 || state_voo_ == 5) {
+      RCLCPP_WARN(this->get_logger(),
+        "⚠️ Ignorando trajetória 4D durante pouso/standby (estado %d)", state_voo_);
+      return;
+    }
+
+    trajectory_waypoints_ = poses;
+    trajectory_yaws_ = yaws;
+    trajectory_4d_mode_ = true;
+    using_4d_goal_ = false;
+    current_waypoint_idx_ = 0;
+    trajectory_started_ = false;
+
+    geometry_msgs::msg::PoseStamped ps;
+    ps.pose = poses[0];
+    last_waypoint_goal_ = ps;
+
+    RCLCPP_INFO(this->get_logger(),
+      "✈️ 4D WAYPOINTS DE TRAJETÓRIA armazenados: %zu pontos", msg->waypoints.size());
+    for (size_t i = 0; i < msg->waypoints.size(); i++) {
+      RCLCPP_INFO(this->get_logger(),
+        "   WP4D[%zu]: X=%.2f Y=%.2f Z=%.2f yaw=%.3f rad",
+        i, poses[i].position.x, poses[i].position.y, poses[i].position.z, yaws[i]);
+    }
+
+    if (state_voo_ != 2) {
+      RCLCPP_INFO(this->get_logger(),
+        "⏸️ Trajetória 4D armazenada - Será ativada quando drone chegar em HOVER (ESTADO 2)");
+      controlador_ativo_ = false;
+      pouso_em_andamento_ = false;
+      return;
+    }
+
+    // Em HOVER: ativa imediatamente
+    RCLCPP_INFO(this->get_logger(), "\n✅ TRAJETÓRIA 4D ACEITA E ATIVADA! Drone em HOVER pronto!\n");
+    if (hover_cmd_id_) {
+      cmd_queue_.confirm(*hover_cmd_id_, true);
+      hover_cmd_id_.reset();
+    }
+    trajectory_cmd_id_ = cmd_queue_.enqueue(
+      CommandType::TRAJECTORY, {{"waypoints", std::to_string(msg->waypoints.size())}});
+    controlador_ativo_ = true;
+    pouso_em_andamento_ = false;
+    state_voo_ = 3;
+    RCLCPP_INFO(this->get_logger(), "✅ Trajetória 4D ativada - Entrando em ESTADO 3\n");
+  }
   void publishPositionTarget(double x, double y, double z, double yaw_rate, uint16_t type_mask) {
     mavros_msgs::msg::PositionTarget pt;
     pt.header.stamp = this->now();
@@ -1129,6 +1434,20 @@ private:
     pt.position.y = static_cast<float>(y);
     pt.position.z = static_cast<float>(z);
     pt.yaw_rate = static_cast<float>(yaw_rate);
+    raw_pub_->publish(pt);
+  }
+
+  // Publish a position setpoint with absolute yaw (MASK_POS_YAW: ignores vel/acc/yaw_rate).
+  void publishPositionTargetWithYaw(double x, double y, double z, double yaw_rad) {
+    mavros_msgs::msg::PositionTarget pt;
+    pt.header.stamp = this->now();
+    pt.header.frame_id = "map";
+    pt.coordinate_frame = mavros_msgs::msg::PositionTarget::FRAME_LOCAL_NED;
+    pt.type_mask = MASK_POS_YAW;
+    pt.position.x = static_cast<float>(x);
+    pt.position.y = static_cast<float>(y);
+    pt.position.z = static_cast<float>(z);
+    pt.yaw = static_cast<float>(yaw_rad);
     raw_pub_->publish(pt);
   }
 
@@ -1255,11 +1574,19 @@ private:
       // ──────────────────────────────────────────
       // Publica setpoint de decolagem usando Z do último waypoint recebido
       double target_altitude = last_waypoint_goal_.pose.position.z;
-      publishPositionTarget(
-        last_waypoint_goal_.pose.position.x,
-        last_waypoint_goal_.pose.position.y,
-        target_altitude,
-        0.0, MASK_POS_ONLY);
+      if (using_4d_goal_) {
+        publishPositionTargetWithYaw(
+          last_waypoint_goal_.pose.position.x,
+          last_waypoint_goal_.pose.position.y,
+          target_altitude,
+          goal_yaw_rad_);
+      } else {
+        publishPositionTarget(
+          last_waypoint_goal_.pose.position.x,
+          last_waypoint_goal_.pose.position.y,
+          target_altitude,
+          0.0, MASK_POS_ONLY);
+      }
 
       takeoff_counter_++;
 
@@ -1313,11 +1640,19 @@ private:
     else if (state_voo_ == 2) {
 
       // Publica setpoint em hover usando Z do último waypoint recebido
-      publishPositionTarget(
-        last_waypoint_goal_.pose.position.x,
-        last_waypoint_goal_.pose.position.y,
-        last_waypoint_goal_.pose.position.z,
-        0.0, MASK_POS_ONLY);
+      if (using_4d_goal_) {
+        publishPositionTargetWithYaw(
+          last_waypoint_goal_.pose.position.x,
+          last_waypoint_goal_.pose.position.y,
+          last_waypoint_goal_.pose.position.z,
+          goal_yaw_rad_);
+      } else {
+        publishPositionTarget(
+          last_waypoint_goal_.pose.position.x,
+          last_waypoint_goal_.pose.position.y,
+          last_waypoint_goal_.pose.position.z,
+          0.0, MASK_POS_ONLY);
+      }
 
       if (cycle_count_ % 500 == 0) {
         RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 10000,
@@ -1417,11 +1752,20 @@ private:
       // PUBLICAR waypoint ATUAL
       const auto & current_waypoint = trajectory_waypoints_[current_waypoint_idx_];
 
-      publishPositionTarget(
-        current_waypoint.position.x,
-        current_waypoint.position.y,
-        current_waypoint.position.z,
-        0.0, MASK_POS_ONLY);
+      if (trajectory_4d_mode_ &&
+          static_cast<size_t>(current_waypoint_idx_) < trajectory_yaws_.size()) {
+        publishPositionTargetWithYaw(
+          current_waypoint.position.x,
+          current_waypoint.position.y,
+          current_waypoint.position.z,
+          trajectory_yaws_[current_waypoint_idx_]);
+      } else {
+        publishPositionTarget(
+          current_waypoint.position.x,
+          current_waypoint.position.y,
+          current_waypoint.position.z,
+          0.0, MASK_POS_ONLY);
+      }
 
       // LOG: Mostrar progresso da trajetória
       if (cycle_count_ % 500 == 0) {
@@ -1625,6 +1969,8 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr waypoint_goal_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<drone_control::msg::YawOverride>::SharedPtr yaw_override_sub_;
+  rclcpp::Subscription<drone_control::msg::Waypoint4D>::SharedPtr waypoint_goal_4d_sub_;
+  rclcpp::Subscription<drone_control::msg::Waypoint4DArray>::SharedPtr waypoints_4d_sub_;
 
   // Service Clients - ATIVAÇÃO OFFBOARD + ARM
   rclcpp::Client<mavros_msgs::srv::SetMode>::SharedPtr mode_client_;
@@ -1683,6 +2029,13 @@ private:
   double hold_x_ned_;                    ///< X de hold (NED)
   double hold_y_ned_;                    ///< Y de hold (NED)
   double hold_z_ned_;                    ///< Z de hold (NED, valor bruto do odom)
+
+  // ── Suporte a waypoints 4D (posição + yaw absoluto) ───────────────────
+  double current_yaw_rad_;              ///< yaw atual do drone (rad, extraído do odom)
+  double goal_yaw_rad_;                 ///< yaw alvo do waypoint 4D ativo (rad, [-pi,pi])
+  bool using_4d_goal_;                  ///< true quando o último goal veio de /waypoint_goal_4d
+  bool trajectory_4d_mode_;             ///< true quando a trajetória ativa veio de /waypoints_4d
+  std::vector<double> trajectory_yaws_; ///< yaw por waypoint da trajetória 4D (rad, [-pi,pi])
 
   // ── Modo de pouso ──────────────────────────────────────────────────────
   /// 0=Modo A (standby no chão, OFFBOARD+ARMED), 1=Modo B (DISARM, padrão)
