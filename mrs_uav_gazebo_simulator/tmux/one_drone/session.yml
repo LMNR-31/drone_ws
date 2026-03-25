@@ -82,6 +82,8 @@ windows:
             -p auto_latch_airborne_on_start:=true \
             -p auto_takeoff_on_start:=false \
             -p airborne_z_threshold:=0.3 \
+            -p auto_latch_min_altitude:=1.0 \
+            -p auto_latch_hold_time:=1.0 \
             2>&1 | tee -a /tmp/drone_logs/hover_supervisor_node_$(date +%Y%m%d_%H%M%S).log
 
   # ── 8. Debug console ───────────────────────────────────────────────────────

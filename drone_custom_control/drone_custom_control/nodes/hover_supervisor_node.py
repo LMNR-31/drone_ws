@@ -115,6 +115,9 @@ class HoverSupervisorNode(Node):
         self.declare_parameter('auto_latch_airborne_on_start', True)
         self.declare_parameter('auto_takeoff_on_start', False)
         self.declare_parameter('airborne_z_threshold', 0.3)
+        self.declare_parameter('auto_latch_min_altitude', 1.0)
+        self.declare_parameter('auto_latch_hold_time', 1.0)
+        self.declare_parameter('auto_latch_requires_takeoff_altitude', False)
 
         uav = self.get_parameter('uav_name').get_parameter_value().string_value
         self._uav = uav
@@ -159,6 +162,21 @@ class HoverSupervisorNode(Node):
                 'airborne_z_threshold'
             ).get_parameter_value().double_value
         )
+        self._auto_latch_min_altitude = (
+            self.get_parameter(
+                'auto_latch_min_altitude'
+            ).get_parameter_value().double_value
+        )
+        self._auto_latch_hold_time = (
+            self.get_parameter(
+                'auto_latch_hold_time'
+            ).get_parameter_value().double_value
+        )
+        self._auto_latch_requires_takeoff_altitude = (
+            self.get_parameter(
+                'auto_latch_requires_takeoff_altitude'
+            ).get_parameter_value().bool_value
+        )
 
         # ---- FSM state ---------------------------------------------------
         self._fsm = _IDLE
@@ -187,6 +205,10 @@ class HoverSupervisorNode(Node):
         # ---- once-only startup automation flags --------------------------
         self._auto_latch_done: bool = False
         self._auto_takeoff_done: bool = False
+
+        # ---- auto-latch hold-timer state (seconds; <0 means not started) ----
+        self._auto_latch_cond_since: float = -1.0
+        self._last_auto_latch_warn: float = 0.0
 
         # ---- setpoint (always publishing) --------------------------------
         self._setpoint = PoseStamped()
@@ -237,6 +259,8 @@ class HoverSupervisorNode(Node):
             f'takeoff_alt={self._takeoff_alt}m '
             f'frame={self._frame_id} rate={rate_hz}Hz '
             f'auto_latch_airborne={self._auto_latch_airborne} '
+            f'auto_latch_min_alt={self._auto_latch_min_altitude}m '
+            f'auto_latch_hold_time={self._auto_latch_hold_time}s '
             f'airborne_z_thr={self._airborne_z_threshold}m '
             f'auto_takeoff={self._auto_takeoff_on_start}'
         )
@@ -396,24 +420,64 @@ class HoverSupervisorNode(Node):
 
     def _do_idle(self) -> None:
         # Auto-latch when already airborne and OFFBOARD+ARM is active (once only).
-        # This enables safe handoff from mavros_takeoff_node: when that node is
-        # stopped, this supervisor already holds the current airborne position.
-        if (self._auto_latch_airborne and not self._auto_latch_done
-                and self._odom_z >= self._airborne_z_threshold
-                and self._mavros_state.armed
-                and self._mavros_state.mode == 'OFFBOARD'):
-            self.get_logger().info(
-                f'auto_latch_airborne: z={self._odom_z:.3f}m >= '
-                f'{self._airborne_z_threshold:.3f}m, OFFBOARD+ARM detected'
-                ' – auto-latching current position and entering HOVER'
-            )
-            self._setpoint.pose.position.x = self._odom_x
-            self._setpoint.pose.position.y = self._odom_y
-            self._setpoint.pose.position.z = self._odom_z
-            self._target_z = self._odom_z
-            self._auto_latch_done = True
-            self._transition(_HOVER)
-            return
+        # Conditions must hold continuously for auto_latch_hold_time seconds so
+        # that a transient climb (another publisher still active) does not cause
+        # the supervisor to latch at a dangerously low altitude.
+        if self._auto_latch_airborne and not self._auto_latch_done:
+            armed = self._mavros_state.armed
+            mode = self._mavros_state.mode
+            offboard_armed = armed and mode == 'OFFBOARD'
+
+            # Determine the effective minimum altitude for latching.
+            # Take the larger of auto_latch_min_altitude and airborne_z_threshold
+            # so that both old and new threshold parameters are respected.
+            req_alt = max(self._auto_latch_min_altitude, self._airborne_z_threshold)
+            if self._auto_latch_requires_takeoff_altitude:
+                req_alt = max(req_alt, self._alt_threshold)
+
+            now_s = self.get_clock().now().nanoseconds * 1e-9
+
+            if not offboard_armed:
+                # Not in OFFBOARD+ARM – reset hold timer silently.
+                self._auto_latch_cond_since = -1.0
+            elif self._odom_z < req_alt:
+                # OFFBOARD+ARM active but altitude too low – inhibit and warn.
+                if now_s - self._last_auto_latch_warn >= 2.0:
+                    self._last_auto_latch_warn = now_s
+                    self.get_logger().warn(
+                        f'auto_latch_airborne inhibited: '
+                        f'z={self._odom_z:.3f}m < '
+                        f'auto_latch_min_altitude={req_alt:.3f}m '
+                        '(OFFBOARD+ARM active; waiting for safe altitude '
+                        'before latching to avoid commanding descent)'
+                    )
+                self._auto_latch_cond_since = -1.0
+            else:
+                # Altitude OK – start or continue the stability hold timer.
+                if self._auto_latch_cond_since < 0.0:
+                    self._auto_latch_cond_since = now_s
+                    self.get_logger().info(
+                        f'auto_latch_airborne: conditions met at '
+                        f'z={self._odom_z:.3f}m >= {req_alt:.3f}m; '
+                        f'waiting {self._auto_latch_hold_time:.1f}s '
+                        'for stability before latching'
+                    )
+                elif now_s - self._auto_latch_cond_since >= self._auto_latch_hold_time:
+                    self.get_logger().info(
+                        f'auto_latch_airborne: z={self._odom_z:.3f}m >= '
+                        f'{req_alt:.3f}m held for '
+                        f'{self._auto_latch_hold_time:.1f}s, '
+                        'OFFBOARD+ARM detected'
+                        ' – latching current position and entering HOVER'
+                    )
+                    self._setpoint.pose.position.x = self._odom_x
+                    self._setpoint.pose.position.y = self._odom_y
+                    self._setpoint.pose.position.z = self._odom_z
+                    self._target_z = self._odom_z
+                    self._auto_latch_done = True
+                    self._auto_latch_cond_since = -1.0
+                    self._transition(_HOVER)
+                    return
 
         # Auto-takeoff on start (once only, after odom is received).
         if self._auto_takeoff_on_start and not self._auto_takeoff_done:
