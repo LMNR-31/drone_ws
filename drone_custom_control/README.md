@@ -140,9 +140,22 @@ airborne vehicle while the node is starting up.
 ### Auto-latch on airborne handoff (`auto_latch_airborne_on_start`)
 
 When `auto_latch_airborne_on_start` is `true` (the default), the node watches
-for the drone to be **airborne** (`odom_z ≥ airborne_z_threshold`) **and**
-already in OFFBOARD+ARM.  As soon as that condition is met, it automatically
+for the drone to be **airborne** and already in OFFBOARD+ARM.  Once all
+conditions are met *continuously* for `auto_latch_hold_time` seconds, it
 latches the current position (`x`, `y`, `z`) and transitions to `HOVER`.
+
+**Altitude safety gate:** The latch is only allowed when
+`odom_z >= max(auto_latch_min_altitude, airborne_z_threshold)`.  If OFFBOARD+ARM
+becomes active while the drone is still below this threshold (e.g. during a
+transient climb with another publisher still running), the node emits a
+throttled `WARN` log and waits.  This prevents the supervisor from latching a
+low setpoint that would cause the vehicle to descend once the other publisher
+stops.
+
+If `auto_latch_requires_takeoff_altitude` is `true` (default `false`), the
+latch additionally requires `odom_z >= altitude_threshold`, which is useful
+when the supervisor must wait for `mavros_takeoff_node` to complete its full
+climb before taking over.
 
 This enables a clean handoff from `mavros_takeoff_node`:
 
@@ -177,7 +190,10 @@ service call is desired.
 | `z_step_per_tick` | `0.0` | Max Z change per timer tick (0 = unlimited) |
 | `auto_latch_airborne_on_start` | `true` | Auto-latch current position if already airborne+OFFBOARD+ARM on startup |
 | `auto_takeoff_on_start` | `false` | Trigger takeoff automatically after first odom received |
-| `airborne_z_threshold` | `0.3` | Altitude (m) above which drone is considered airborne for auto-latch |
+| `airborne_z_threshold` | `0.3` | Minimum altitude (m) for auto-latch; combined with `auto_latch_min_altitude` as `max(airborne_z_threshold, auto_latch_min_altitude)` |
+| `auto_latch_min_altitude` | `1.0` | Minimum `odom_z` (m) required before auto-latch is allowed; prevents latching during transient climb |
+| `auto_latch_hold_time` | `1.0` | Seconds all auto-latch conditions must be continuously true before latching (stability window) |
+| `auto_latch_requires_takeoff_altitude` | `false` | If `true`, also require `odom_z >= altitude_threshold` before auto-latching |
 
 ### Topics
 
@@ -210,6 +226,8 @@ Start the supervisor (runs indefinitely, auto-latches if already airborne):
 ros2 run drone_custom_control hover_supervisor_node --ros-args \
   -p uav_name:=uav1 \
   -p auto_latch_airborne_on_start:=true \
+  -p auto_latch_min_altitude:=1.0 \
+  -p auto_latch_hold_time:=1.0 \
   -p auto_takeoff_on_start:=false
 ```
 
@@ -239,12 +257,17 @@ only for the one-shot climb:
 
 ```bash
 # Terminal 1 – start supervisor first (waits for odom, then auto-latches)
+# auto_latch_min_altitude=1.0 ensures the latch does not fire during the
+# initial transient climb while mavros_takeoff_node is still publishing.
 ros2 run drone_custom_control hover_supervisor_node --ros-args \
   -p uav_name:=uav1 \
   -p auto_latch_airborne_on_start:=true \
+  -p auto_latch_min_altitude:=1.0 \
+  -p auto_latch_hold_time:=1.0 \
   -p auto_takeoff_on_start:=false
 
-# Terminal 2 – takeoff (supervisor will detect OFFBOARD+ARM and auto-latch)
+# Terminal 2 – takeoff (supervisor will detect OFFBOARD+ARM and auto-latch
+# once the drone has been above 1.0 m stably for 1 s)
 ros2 run drone_custom_control mavros_takeoff_node --ros-args \
   -p uav_name:=uav1 \
   -p takeoff_altitude:=2.0
