@@ -101,6 +101,97 @@ ros2 run drone_custom_control mavros_takeoff_node --ros-args \
   -p uav_name:=uav1
 ```
 
+---
+
+## `hover_supervisor_node`
+
+Persistent hover supervisor that **never exits**.  It continuously streams
+`PoseStamped` setpoints to `/{uav_name}/mavros/setpoint_position/local` so
+OFFBOARD mode remains active even after the client node that triggered takeoff
+shuts down.
+
+### When to use this instead of `mavros_takeoff_node`?
+
+Use `hover_supervisor_node` when you need a *daemon-style* process to maintain
+hover indefinitely.  Use `mavros_takeoff_node` when you only need a
+one-shot takeoff helper that exits after the drone is airborne.
+
+### State machine
+
+```
+IDLE → WARMUP → REQ_OFFBOARD → REQ_ARM → CONFIRM → TAKEOFF → HOVER
+```
+
+The node stays in `HOVER` indefinitely, streaming setpoints.
+
+### Parameters
+
+| Parameter | Default | Description |
+|---|---|---|
+| `uav_name` | `uav1` | MAVROS namespace prefix |
+| `frame_id` | `map` | `frame_id` for published `PoseStamped` messages |
+| `rate_hz` | `20.0` | Setpoint publish rate (Hz) |
+| `takeoff_altitude` | `2.0` | Target altitude in metres (positive-UP, ENU) |
+| `altitude_threshold` | `1.8` | Minimum altitude (m) to consider takeoff complete |
+| `warmup_streaming_time` | `2.0` | Seconds to stream setpoints before requesting OFFBOARD |
+| `timeout_confirm` | `10.0` | Seconds to wait for OFFBOARD+ARM confirmation |
+| `timeout_takeoff` | `20.0` | Seconds before retrying if altitude not reached |
+| `auto_offboard_arm` | `true` | Automatically request OFFBOARD + ARM on takeoff |
+| `z_step_per_tick` | `0.0` | Max Z change per timer tick (0 = unlimited) |
+
+### Topics
+
+| Direction | Topic | Type |
+|---|---|---|
+| Subscribe | `/{uav_name}/mavros/state` | `mavros_msgs/msg/State` |
+| Subscribe | `/{uav_name}/mavros/local_position/odom` | `nav_msgs/msg/Odometry` |
+| Subscribe | `~/set_altitude` | `std_msgs/msg/Float64` |
+| Publish | `/{uav_name}/mavros/setpoint_position/local` | `geometry_msgs/msg/PoseStamped` |
+
+### Services offered
+
+| Service | Type | Description |
+|---|---|---|
+| `~/takeoff` | `std_srvs/Trigger` | Latch current XY, climb to `takeoff_altitude` |
+| `~/latch_here` | `std_srvs/Trigger` | Latch current XYZ and hover |
+
+### Services called
+
+| Service | Type |
+|---|---|
+| `/{uav_name}/mavros/set_mode` | `mavros_msgs/srv/SetMode` |
+| `/{uav_name}/mavros/cmd/arming` | `mavros_msgs/srv/CommandBool` |
+
+### Example commands
+
+Start the supervisor (runs indefinitely):
+
+```bash
+ros2 run drone_custom_control hover_supervisor_node --ros-args \
+  -p uav_name:=uav1
+```
+
+Trigger takeoff (from another terminal):
+
+```bash
+ros2 service call /hover_supervisor_node/takeoff std_srvs/srv/Trigger {}
+```
+
+Latch current position as hover target:
+
+```bash
+ros2 service call /hover_supervisor_node/latch_here std_srvs/srv/Trigger {}
+```
+
+Override hover altitude while airborne:
+
+```bash
+ros2 topic pub --once /hover_supervisor_node/set_altitude std_msgs/msg/Float64 \
+  "{data: 3.0}"
+```
+
+---
+
 #### Handoff to `lpv_mpc_drone_node`
 
 1. Start `mavros_takeoff_node` with
