@@ -30,6 +30,26 @@ State machine
 IDLE → WARMUP → REQ_OFFBOARD → REQ_ARM → CONFIRM → TAKEOFF → HOVER
 
 The node stays in HOVER indefinitely, continuously streaming setpoints.
+
+Safety
+------
+No setpoints are published until the first odometry message is received so
+that a stale (0, 0, 0) setpoint is never sent to an airborne vehicle.
+
+Auto-latch on airborne handoff
+------------------------------
+When ``auto_latch_airborne_on_start`` is ``true`` (default) the node monitors
+the FSM IDLE state and, as soon as it detects that the drone is already
+airborne (``odom_z >= airborne_z_threshold``) **and** OFFBOARD+ARM is active,
+it immediately latches the current position and enters HOVER.  This allows a
+safe handoff from ``mavros_takeoff_node``: stop the takeoff node and this
+supervisor seamlessly holds position.  The check runs at most once.
+
+Auto-takeoff on start
+---------------------
+When ``auto_takeoff_on_start`` is ``true`` (default ``false``) the node
+triggers the same flow as calling ``~/takeoff`` automatically after receiving
+the first odometry message, without requiring an external service call.
 """
 
 import rclpy
@@ -92,6 +112,9 @@ class HoverSupervisorNode(Node):
         self.declare_parameter('timeout_takeoff', 20.0)
         self.declare_parameter('auto_offboard_arm', True)
         self.declare_parameter('z_step_per_tick', 0.0)  # 0 = unlimited
+        self.declare_parameter('auto_latch_airborne_on_start', True)
+        self.declare_parameter('auto_takeoff_on_start', False)
+        self.declare_parameter('airborne_z_threshold', 0.3)
 
         uav = self.get_parameter('uav_name').get_parameter_value().string_value
         self._uav = uav
@@ -121,6 +144,21 @@ class HoverSupervisorNode(Node):
         self._z_step = (
             self.get_parameter('z_step_per_tick').get_parameter_value().double_value
         )
+        self._auto_latch_airborne = (
+            self.get_parameter(
+                'auto_latch_airborne_on_start'
+            ).get_parameter_value().bool_value
+        )
+        self._auto_takeoff_on_start = (
+            self.get_parameter(
+                'auto_takeoff_on_start'
+            ).get_parameter_value().bool_value
+        )
+        self._airborne_z_threshold = (
+            self.get_parameter(
+                'airborne_z_threshold'
+            ).get_parameter_value().double_value
+        )
 
         # ---- FSM state ---------------------------------------------------
         self._fsm = _IDLE
@@ -145,6 +183,10 @@ class HoverSupervisorNode(Node):
         # ---- status log throttle -----------------------------------------
         self._last_status_log: float = 0.0
         self._last_takeoff_log: float = 0.0
+
+        # ---- once-only startup automation flags --------------------------
+        self._auto_latch_done: bool = False
+        self._auto_takeoff_done: bool = False
 
         # ---- setpoint (always publishing) --------------------------------
         self._setpoint = PoseStamped()
@@ -193,8 +235,18 @@ class HoverSupervisorNode(Node):
         self.get_logger().info(
             f'hover_supervisor_node started | uav={uav} '
             f'takeoff_alt={self._takeoff_alt}m '
-            f'frame={self._frame_id} rate={rate_hz}Hz'
+            f'frame={self._frame_id} rate={rate_hz}Hz '
+            f'auto_latch_airborne={self._auto_latch_airborne} '
+            f'airborne_z_thr={self._airborne_z_threshold}m '
+            f'auto_takeoff={self._auto_takeoff_on_start}'
         )
+        if self._auto_latch_airborne:
+            self.get_logger().warn(
+                'WARNING: ensure only one node publishes '
+                f'/{uav}/mavros/setpoint_position/local at a time. '
+                'Run hover_supervisor_node as the sole setpoint publisher; '
+                'stop mavros_takeoff_node before relying on this node to hold.'
+            )
 
     # ------------------------------------------------------------------
     # Subscriber callbacks
@@ -301,6 +353,11 @@ class HoverSupervisorNode(Node):
     # ------------------------------------------------------------------
 
     def _tick(self) -> None:
+        # Safety: do not publish any setpoint until odometry is received.
+        # Publishing (0,0,0) before we know where the drone is could be unsafe.
+        if not self._odom_received:
+            return
+
         # Apply rate-limited altitude step if z_step_per_tick > 0
         if self._z_step > 0.0:
             current_z = self._setpoint.pose.position.z
@@ -338,6 +395,46 @@ class HoverSupervisorNode(Node):
     # ------------------------------------------------------------------
 
     def _do_idle(self) -> None:
+        # Auto-latch when already airborne and OFFBOARD+ARM is active (once only).
+        # This enables safe handoff from mavros_takeoff_node: when that node is
+        # stopped, this supervisor already holds the current airborne position.
+        if (self._auto_latch_airborne and not self._auto_latch_done
+                and self._odom_z >= self._airborne_z_threshold
+                and self._mavros_state.armed
+                and self._mavros_state.mode == 'OFFBOARD'):
+            self.get_logger().info(
+                f'auto_latch_airborne: z={self._odom_z:.3f}m >= '
+                f'{self._airborne_z_threshold:.3f}m, OFFBOARD+ARM detected'
+                ' – auto-latching current position and entering HOVER'
+            )
+            self._setpoint.pose.position.x = self._odom_x
+            self._setpoint.pose.position.y = self._odom_y
+            self._setpoint.pose.position.z = self._odom_z
+            self._target_z = self._odom_z
+            self._auto_latch_done = True
+            self._transition(_HOVER)
+            return
+
+        # Auto-takeoff on start (once only, after odom is received).
+        if self._auto_takeoff_on_start and not self._auto_takeoff_done:
+            self.get_logger().info(
+                'auto_takeoff_on_start: triggering automatic takeoff'
+            )
+            self._setpoint.pose.position.x = self._odom_x
+            self._setpoint.pose.position.y = self._odom_y
+            self._setpoint.pose.position.z = self._odom_z
+            self._target_z = self._takeoff_alt
+            self._auto_takeoff_done = True
+            already_active = (
+                self._mavros_state.armed
+                and self._mavros_state.mode == 'OFFBOARD'
+            )
+            if self._auto_offboard_arm and not already_active:
+                self._transition(_WARMUP)
+            else:
+                self._transition(_TAKEOFF)
+            return
+
         self._log_status()
 
     def _do_warmup(self) -> None:
