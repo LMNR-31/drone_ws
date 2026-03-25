@@ -26,6 +26,7 @@ setup(
         'console_scripts': [
             'drone_activation_node = drone_custom_control.nodes.drone_activation_node:main',
             'lpv_mpc_drone_node = drone_custom_control.nodes.lpv_mpc_drone_node:main',
+            'mavros_takeoff_node = drone_custom_control.nodes.mavros_takeoff_node:main',
         ],
     },
 )
