@@ -67,13 +67,7 @@ windows:
           waitForPX4; sleep 2
           source ~/ros2_ws/install/setup.bash
           ros2 run drone_custom_control lpv_mpc_drone_node --ros-args \
-          -p uav_name:=uav1 \
-          -p use_velocity_body:=true \
-          -p max_vz_accel:=4.0 \
-          -p max_tilt_rad:=0.25 \
-          -p max_ref_speed_xy:=0.1 \
-          -p max_ref_speed_z:=0.4 \
-          -p hover_altitude_margin:=0.05
+         
 
   # ── 7. Hover supervisor (persistent setpoint streamer) ─────────────────────
   - hover_supervisor:
@@ -84,10 +78,7 @@ windows:
           waitForPX4; sleep 2
           source ~/ros2_ws/install/setup.bash
           ros2 run drone_custom_control hover_supervisor_node --ros-args \
-          -p uav_name:=uav1 \
-          -p takeoff_altitude:=2.0 \
-          -p altitude_threshold:=1.8 \
-          -p warmup_streaming_time:=3.0
+       
 
   # ── 8. Debug console ───────────────────────────────────────────────────────
   - debug_console:
