@@ -273,7 +273,7 @@ class SupportFilesDrone:
 
         return x, x_dot, x_dot_dot, y, y_dot, y_dot_dot, z, z_dot, z_dot_dot, psiInt
 
-    def pos_controller(self,X_ref,X_dot_ref,X_dot_dot_ref,Y_ref,Y_dot_ref,Y_dot_dot_ref,Z_ref,Z_dot_ref,Z_dot_dot_ref,Psi_ref,states):
+    def pos_controller(self,X_ref,X_dot_ref,X_dot_dot_ref,Y_ref,Y_dot_ref,Y_dot_dot_ref,Z_ref,Z_dot_ref,Z_dot_dot_ref,Psi_ref,states,max_vz_accel=3.0):
         '''This function is a position controller - it computes the necessary U1 for the open loop system, and phi & theta angles for the MPC controller'''
 
         # Load the constants
@@ -339,6 +339,9 @@ class SupportFilesDrone:
         vx = X_dot_dot_ref-ux[0]
         vy = Y_dot_dot_ref-uy[0]
         vz = Z_dot_dot_ref-uz[0]
+
+        # Clamp vertical acceleration demand to prevent thrust saturation
+        vz = float(np.clip(vz, -max_vz_accel, max_vz_accel))
 
         # Compute phi, theta, U1
         a=vx/(vz+g)
@@ -792,6 +795,9 @@ class LPVMPC_Drone(Node):
         self.declare_parameter('max_ref_speed_xy',      2.0)
         self.declare_parameter('max_ref_speed_z',       1.0)
         self.declare_parameter('use_velocity_body',     True)
+        self.declare_parameter('max_vz_accel',          3.0)
+        self.declare_parameter('max_tilt_rad',          0.5)
+        self.declare_parameter('thrust_warn_threshold', 0.95)
 
         uav = self.get_parameter('uav_name').value
 
@@ -807,6 +813,9 @@ class LPVMPC_Drone(Node):
         self.max_ref_speed_xy   = float(self.get_parameter('max_ref_speed_xy').value)
         self.max_ref_speed_z    = float(self.get_parameter('max_ref_speed_z').value)
         self.use_velocity_body  = bool(self.get_parameter('use_velocity_body').value)
+        self.max_vz_accel = float(self.get_parameter('max_vz_accel').value)
+        self.max_tilt_rad = float(self.get_parameter('max_tilt_rad').value)
+        self.thrust_warn_threshold = float(self.get_parameter('thrust_warn_threshold').value)
 
         if self.landing_mode not in (0, 1):
             self.get_logger().warn(
@@ -980,6 +989,16 @@ class LPVMPC_Drone(Node):
                 self.get_logger().info(
                     f'landing_mode -> {val} '
                     f'({"standby on ground" if val == 0 else "DISARM"})')
+            elif p.name == 'max_vz_accel':
+                self.max_vz_accel = float(p.value)
+                self.get_logger().info(f'max_vz_accel -> {self.max_vz_accel:.2f} m/s²')
+            elif p.name == 'max_tilt_rad':
+                self.max_tilt_rad = float(p.value)
+                self.get_logger().info(f'max_tilt_rad -> {self.max_tilt_rad:.3f} rad')
+            elif p.name == 'thrust_warn_threshold':
+                self.thrust_warn_threshold = float(p.value)
+                self.get_logger().info(
+                    f'thrust_warn_threshold -> {self.thrust_warn_threshold:.3f}')
         return result
 
     # ── Subscribers callbacks ────────────────────────────────────────────────
@@ -1416,7 +1435,7 @@ class LPVMPC_Drone(Node):
                 X_ref, Xd, Xdd,
                 Y_ref, Yd, Ydd,
                 Z_ref, Zd, Zdd,
-                psi_ref, states_enu)
+                psi_ref, states_enu, max_vz_accel=self.max_vz_accel)
         except Exception as exc:
             self.get_logger().warn(f'pos_controller error: {exc}')
             return None
@@ -1427,8 +1446,8 @@ class LPVMPC_Drone(Node):
             phi_ref   = -phi_ref
             theta_ref = -theta_ref
 
-        phi_ref   = float(np.clip(phi_ref,   -0.7, 0.7))
-        theta_ref = float(np.clip(theta_ref, -0.7, 0.7))
+        phi_ref   = float(np.clip(phi_ref,   -self.max_tilt_rad, self.max_tilt_rad))
+        theta_ref = float(np.clip(theta_ref, -self.max_tilt_rad, self.max_tilt_rad))
         psi_ref   = float(psi_ref)
 
         ref_signals  = np.array([phi_ref, theta_ref, psi_ref])
@@ -1478,6 +1497,14 @@ class LPVMPC_Drone(Node):
         att.orientation.x    = 0.0
         att.orientation.y    = 0.0
         att.orientation.z    = 0.0
+
+        if att.thrust >= self.thrust_warn_threshold:
+            self.get_logger().warn(
+                f'THRUST SATURATION: thrust={att.thrust:.3f} U1={U1_new:.1f}N '
+                f'z_enu={self.states[8]:.2f} alt_rel={self._alt_rel():.2f}m '
+                f'Z_ref={Z_ref:.2f} phi_ref={phi_ref:.3f}rad '
+                f'theta_ref={theta_ref:.3f}rad',
+                throttle_duration_sec=2.0)
 
         return att
 
