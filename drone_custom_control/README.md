@@ -110,6 +110,13 @@ Persistent hover supervisor that **never exits**.  It continuously streams
 OFFBOARD mode remains active even after the client node that triggered takeoff
 shuts down.
 
+> **Important – single publisher rule:** Only **one** node should publish to
+> `/{uav_name}/mavros/setpoint_position/local` at a time.  Run
+> `hover_supervisor_node` as the sole publisher.  If you use
+> `mavros_takeoff_node` for the initial climb, stop it (Ctrl-C or kill) as
+> soon as `hover_supervisor_node` has latched position; otherwise the two
+> nodes will fight over the setpoint topic.
+
 ### When to use this instead of `mavros_takeoff_node`?
 
 Use `hover_supervisor_node` when you need a *daemon-style* process to maintain
@@ -123,6 +130,36 @@ IDLE → WARMUP → REQ_OFFBOARD → REQ_ARM → CONFIRM → TAKEOFF → HOVER
 ```
 
 The node stays in `HOVER` indefinitely, streaming setpoints.
+
+### Safety: no publish before odometry
+
+The node does **not** publish any setpoints until the first odometry message
+arrives.  This prevents a stale `(0, 0, 0)` setpoint from being sent to an
+airborne vehicle while the node is starting up.
+
+### Auto-latch on airborne handoff (`auto_latch_airborne_on_start`)
+
+When `auto_latch_airborne_on_start` is `true` (the default), the node watches
+for the drone to be **airborne** (`odom_z ≥ airborne_z_threshold`) **and**
+already in OFFBOARD+ARM.  As soon as that condition is met, it automatically
+latches the current position (`x`, `y`, `z`) and transitions to `HOVER`.
+
+This enables a clean handoff from `mavros_takeoff_node`:
+
+1. Start `hover_supervisor_node` (it will detect the active OFFBOARD session).
+2. Let `mavros_takeoff_node` finish its climb.
+3. Stop `mavros_takeoff_node`.
+4. `hover_supervisor_node` already holds position – the drone does not descend.
+
+The auto-latch runs **at most once** on startup and does not continuously
+relatch in HOVER.
+
+### Auto-takeoff on start (`auto_takeoff_on_start`)
+
+When `auto_takeoff_on_start` is `true` (default `false`) the node triggers
+the same flow as calling `~/takeoff` automatically after receiving the first
+odometry message.  Useful for fully-automated tmux sessions where no manual
+service call is desired.
 
 ### Parameters
 
@@ -138,6 +175,9 @@ The node stays in `HOVER` indefinitely, streaming setpoints.
 | `timeout_takeoff` | `20.0` | Seconds before retrying if altitude not reached |
 | `auto_offboard_arm` | `true` | Automatically request OFFBOARD + ARM on takeoff |
 | `z_step_per_tick` | `0.0` | Max Z change per timer tick (0 = unlimited) |
+| `auto_latch_airborne_on_start` | `true` | Auto-latch current position if already airborne+OFFBOARD+ARM on startup |
+| `auto_takeoff_on_start` | `false` | Trigger takeoff automatically after first odom received |
+| `airborne_z_threshold` | `0.3` | Altitude (m) above which drone is considered airborne for auto-latch |
 
 ### Topics
 
@@ -164,11 +204,13 @@ The node stays in `HOVER` indefinitely, streaming setpoints.
 
 ### Example commands
 
-Start the supervisor (runs indefinitely):
+Start the supervisor (runs indefinitely, auto-latches if already airborne):
 
 ```bash
 ros2 run drone_custom_control hover_supervisor_node --ros-args \
-  -p uav_name:=uav1
+  -p uav_name:=uav1 \
+  -p auto_latch_airborne_on_start:=true \
+  -p auto_takeoff_on_start:=false
 ```
 
 Trigger takeoff (from another terminal):
@@ -188,6 +230,26 @@ Override hover altitude while airborne:
 ```bash
 ros2 topic pub --once /hover_supervisor_node/set_altitude std_msgs/msg/Float64 \
   "{data: 3.0}"
+```
+
+### Recommended handoff sequence
+
+Use `hover_supervisor_node` as the persistent publisher and `mavros_takeoff_node`
+only for the one-shot climb:
+
+```bash
+# Terminal 1 – start supervisor first (waits for odom, then auto-latches)
+ros2 run drone_custom_control hover_supervisor_node --ros-args \
+  -p uav_name:=uav1 \
+  -p auto_latch_airborne_on_start:=true \
+  -p auto_takeoff_on_start:=false
+
+# Terminal 2 – takeoff (supervisor will detect OFFBOARD+ARM and auto-latch)
+ros2 run drone_custom_control mavros_takeoff_node --ros-args \
+  -p uav_name:=uav1 \
+  -p takeoff_altitude:=2.0
+
+# Stop Terminal 2 after takeoff – supervisor holds position automatically
 ```
 
 ---
