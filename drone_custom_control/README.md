@@ -11,6 +11,65 @@ attitude controller and a robust MAVROS position-setpoint takeoff helper.
 
 LPV-MPC attitude-based controller for hover and waypoint navigation.
 
+#### Parameters
+
+| Parameter | Default | Description |
+|---|---|---|
+| `uav_name` | `uav1` | MAVROS namespace prefix |
+| `enabled` | `true` | Enable/disable control loop |
+| `override_active` | `false` | Freeze FSM and publish hold setpoint when true |
+| `landing_mode` | `1` | 0 = standby on ground (State 5), 1 = DISARM |
+| `hover_altitude` | `2.0` | Default hover altitude (m, positive-UP) |
+| `hover_altitude_margin` | `0.3` | Arrival tolerance for takeoff (m) |
+| `land_z_threshold` | `0.3` | Ground altitude threshold for landing detection (m) |
+| `waypoint_duration` | `5.0` | Time per trajectory waypoint (s) |
+| `activation_timeout` | `10.0` | Timeout waiting for OFFBOARD+ARM confirmation (s) |
+| `landing_timeout` | `5.0` | Timeout for landing phase (s) |
+| `max_ref_speed_xy` | `0.5` | Maximum XY reference velocity during approach (m/s) |
+| `max_ref_speed_z` | `0.5` | Maximum vertical reference velocity (m/s) |
+| `max_vz_accel` | `1.5` | Maximum vertical acceleration demand fed to pos_controller (m/s²) |
+| `max_tilt_rad` | `0.25` | Maximum roll/pitch angle clamp (rad, ≈14°) |
+| `thrust_warn_threshold` | `0.95` | Normalised thrust above which THRUST SATURATION is logged |
+| `min_takeoff_alt_rel` | `0.8` | Minimum relative altitude (m) that must be reached before takeoff can complete |
+| `takeoff_complete_hold_time` | `1.5` | Seconds the arrival conditions must be continuously met before switching to HOVER |
+| `use_velocity_body` | `true` | Use body-frame velocity from `/local_position/velocity_body` |
+| `invert_attitude` | `false` | Negate phi/theta before sending (workaround for frame mismatches) |
+
+#### Thrust saturation recovery parameters
+
+When the thrust command stays at or above `saturation_thrust_threshold` for
+`saturation_recovery_cycles` consecutive MPC steps (≈0.1 s each at 10 Hz),
+the node enters a *recovery phase* for `saturation_recovery_duration` MPC steps.
+During recovery the tilt angle clamp and XY speed limit are tightened so the
+vehicle prioritises regaining vertical control before resuming lateral tracking.
+
+| Parameter | Default | Description |
+|---|---|---|
+| `saturation_recovery_enabled` | `true` | Enable/disable the saturation recovery feature |
+| `saturation_thrust_threshold` | `0.95` | Normalised thrust level that increments the saturation counter |
+| `saturation_recovery_cycles` | `5` | Consecutive saturated MPC steps (~0.5 s) before entering recovery |
+| `saturation_recovery_duration` | `10` | MPC steps (~1.0 s) to remain in recovery mode |
+| `saturation_recovery_max_tilt_rad` | `0.15` | Tighter roll/pitch clamp during recovery (rad, ≈9°) |
+| `saturation_recovery_max_ref_speed_xy` | `0.2` | Reduced XY speed limit during recovery (m/s) |
+| `saturation_recovery_freeze_xy` | `false` | If true, freeze the XY goal to current position during recovery to avoid lateral demands |
+
+> **Tuning advice:** If repeated `THRUST SATURATION` warnings appear during
+> takeoff/hover, first try reducing `max_tilt_rad` (e.g. 0.15–0.20) and
+> `max_vz_accel` (e.g. 1.0–1.5).  The saturation recovery acts as a safety net
+> when transient saturation occurs; it is not a substitute for correct PID/MPC
+> tuning.
+
+#### Topics
+
+| Direction | Topic | Type |
+|---|---|---|
+| Subscribe | `/{uav_name}/mavros/local_position/odom` | `nav_msgs/msg/Odometry` |
+| Subscribe | `/{uav_name}/mavros/local_position/velocity_body` | `geometry_msgs/msg/TwistStamped` |
+| Subscribe | `/{uav_name}/mavros/state` | `mavros_msgs/msg/State` |
+| Subscribe | `/waypoints` | `geometry_msgs/msg/PoseArray` |
+| Subscribe | `/waypoint_goal` | `geometry_msgs/msg/PoseStamped` |
+| Publish | `/{uav_name}/mavros/setpoint_raw/attitude` | `mavros_msgs/msg/AttitudeTarget` |
+
 ### `mavros_takeoff_node`
 
 Robust takeoff node that uses `/mavros/setpoint_position/local` (PX4
@@ -317,9 +376,7 @@ ros2 service call /hover_supervisor_node/set_enabled std_srvs/srv/SetBool "{data
 # Step 3 – start MPC controller (now the only publisher)
 ros2 run drone_custom_control lpv_mpc_drone_node --ros-args \
   -p uav_name:=uav1 \
-  -p use_velocity_body:=true \
-  -p max_vz_accel:=4.0 \
-  -p max_tilt_rad:=0.40
+  -p use_velocity_body:=true
 
 # Step 4 – re-enable supervisor to resume hover
 ros2 service call /hover_supervisor_node/set_enabled std_srvs/srv/SetBool "{data: true}"
@@ -368,7 +425,5 @@ ros2 run drone_custom_control mavros_takeoff_node --ros-args \
 # Terminal 2 – MPC (start any time; it waits for /waypoint_goal)
 ros2 run drone_custom_control lpv_mpc_drone_node --ros-args \
   -p uav_name:=uav1 \
-  -p use_velocity_body:=true \
-  -p max_vz_accel:=4.0 \
-  -p max_tilt_rad:=0.40
+  -p use_velocity_body:=true
 ```
