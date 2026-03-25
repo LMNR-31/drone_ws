@@ -31,11 +31,16 @@ public:
     this->declare_parameter<double>("hz", 20.0);
     // ccw: true = anti-horário (counter-clockwise), false = horário (clockwise)
     this->declare_parameter<bool>("ccw", true);
-    // controller_node: nome do nó controlador a pausar/retomar durante o giro
+    // controller_node: nome do nó controlador (my_drone_controller / drone_controller_completo)
+    // a pausar/retomar durante o giro
     this->declare_parameter<std::string>("controller_node", "drone_controller_completo");
-    // auto_disable_controller: se true, ativa override_active no controller antes de girar
-    // e desativa ao terminar, evitando conflito de setpoints durante o giro.
+    // auto_disable_controller: se true, seta override_active=true no my_drone_controller antes
+    // de girar e override_active=false ao terminar, congelando a FSM durante o giro.
     this->declare_parameter<bool>("auto_disable_controller", true);
+    // set_enabled_param: se true (padrão), também seta enabled=false no drone_controller_completo
+    // durante o giro (impede publicação de hold setpoints) e restaura enabled=true ao final.
+    // Requer auto_disable_controller=true para ter efeito.
+    this->declare_parameter<bool>("set_enabled_param", true);
     // exit_on_finish: se true (padrão), chama rclcpp::shutdown() após o giro.
     // Se false, retorna a WAIT_OFFBOARD_AND_ARMED para permitir novos giros.
     this->declare_parameter<bool>("exit_on_finish", true);
@@ -48,6 +53,7 @@ public:
     ccw_                     = this->get_parameter("ccw").as_bool();
     controller_node_         = this->get_parameter("controller_node").as_string();
     auto_disable_controller_ = this->get_parameter("auto_disable_controller").as_bool();
+    set_enabled_param_       = this->get_parameter("set_enabled_param").as_bool();
     exit_on_finish_          = this->get_parameter("exit_on_finish").as_bool();
 
     if (hz_ <= 0.0) {
@@ -81,8 +87,9 @@ public:
         uav_ns_.c_str(), z_hold_, yaw_rate_, angle_, hz_, dir_str, duration_);
     }
     RCLCPP_INFO(this->get_logger(),
-      "Parâmetros: controller_node=%s auto_disable_controller=%s (usa override_active) exit_on_finish=%s",
+      "Parâmetros: controller_node=%s auto_disable_controller=%s (override_active) set_enabled_param=%s (enabled) exit_on_finish=%s",
       controller_node_.c_str(), auto_disable_controller_ ? "true" : "false",
+      set_enabled_param_ ? "true" : "false",
       exit_on_finish_ ? "true" : "false");
 
     // ==========================================
@@ -109,11 +116,12 @@ public:
       uav_ns_.c_str(), uav_ns_.c_str());
 
     // ==========================================
-    // CLIENTE DE PARÂMETROS (para ativar/desativar override no controller)
+    // CLIENTE DE PARÂMETROS (para ativar/desativar override e enabled no my_drone_controller)
     //
-    // Mantido para compatibilidade: sinaliza ao controller para congelar a FSM
-    // enquanto o giro acontece (override_active).  O controller continuará
-    // publicando hold setpoints (não para o stream OFFBOARD).
+    // Integração com my_drone_controller (drone_controller_completo):
+    //   - override_active=true  → congela FSM (continua publicando hold setpoints)
+    //   - enabled=false         → para completamente a publicação de setpoints do controller,
+    //                             dando controle exclusivo ao yaw_override durante o giro.
     // ==========================================
     if (auto_disable_controller_) {
       param_cb_group_ = this->create_callback_group(
@@ -140,7 +148,8 @@ public:
 
   ~DroneYaw360()
   {
-    // Tenta desativar o override no controller mesmo em caso de shutdown inesperado (best-effort)
+    // Tenta desativar o override no controller mesmo em caso de shutdown inesperado (best-effort).
+    // Restaura override_active=false e enabled=true no my_drone_controller (drone_controller_completo).
     if (controller_disabled_) {
       // Publica mensagem de disable do yaw override
       if (yaw_override_pub_) {
@@ -152,10 +161,20 @@ public:
       }
     }
     if (auto_disable_controller_ && controller_disabled_) {
-      RCLCPP_INFO(this->get_logger(),
-        "🔓 Destrutor: desativando override em '%s' (override_active=false) best-effort...", controller_node_.c_str());
       if (param_client_ && param_client_->service_is_ready()) {
+        RCLCPP_INFO(this->get_logger(),
+          "🔓 Destrutor: restaurando override_active=false e enabled=true em '%s' (best-effort)...",
+          controller_node_.c_str());
+        // Restaura override_active=false para retomar FSM do my_drone_controller
         param_client_->set_parameters({rclcpp::Parameter("override_active", false)});
+        // Restaura enabled=true para retomar publicação de setpoints do my_drone_controller
+        if (set_enabled_param_) {
+          param_client_->set_parameters({rclcpp::Parameter("enabled", true)});
+        }
+      } else {
+        RCLCPP_WARN(this->get_logger(),
+          "⚠️  Destrutor: serviço de parâmetros de '%s' indisponível — override_active/enabled não restaurados.",
+          controller_node_.c_str());
       }
     }
   }
@@ -188,14 +207,14 @@ private:
   /**
    * @brief Set the `override_active` parameter on the remote controller node (non-blocking).
    *
-   * Sends a fire-and-forget parameter set request via AsyncParametersClient.
-   * We deliberately do NOT call future.wait_for() here to avoid hanging the
-   * timer callback — the set is best-effort and the response is discarded.
+   * Integração com my_drone_controller: override_active=true congela a FSM do
+   * drone_controller_completo mas mantém a publicação de hold setpoints para
+   * preservar o modo OFFBOARD. override_active=false retoma a FSM normal.
    *
-   * Best-effort: logs a warning if the service is unavailable and always returns.
-   * Safe when the controller node is absent (service not ready → warn + return).
+   * Fire-and-forget via AsyncParametersClient — não bloqueia o timer callback.
+   * Best-effort: loga warning se o serviço estiver indisponível.
    *
-   * @param value  New value for `override_active` (true = override on, false = off).
+   * @param value  New value for `override_active` (true = freeze FSM, false = resume).
    */
   void setControllerOverride(bool value)
   {
@@ -204,7 +223,7 @@ private:
     }
     if (!param_client_->service_is_ready()) {
       RCLCPP_WARN(this->get_logger(),
-        "⚠️  Serviço de parâmetros de '%s' não disponível — continuando sem %s o override.",
+        "⚠️  Serviço de parâmetros de '%s' não disponível — continuando sem %s o override_active.",
         controller_node_.c_str(), value ? "ativar" : "desativar");
       return;
     }
@@ -212,8 +231,45 @@ private:
     // Fire-and-forget: não bloqueamos o timer callback aguardando a resposta.
     param_client_->set_parameters({rclcpp::Parameter("override_active", value)});
     RCLCPP_INFO(this->get_logger(),
-      "%s override_active=%s em '%s' (best-effort, não bloqueante).",
+      "%s override_active=%s em '%s' (my_drone_controller, best-effort).",
       value ? "🔒 Ativando" : "🔓 Desativando",
+      value ? "true" : "false",
+      controller_node_.c_str());
+  }
+
+  /**
+   * @brief Set the `enabled` parameter on the remote controller node (non-blocking).
+   *
+   * Integração com my_drone_controller: enabled=false para completamente a publicação
+   * de setpoints do drone_controller_completo, dando controle exclusivo ao yaw_override
+   * durante o giro. enabled=true retoma a publicação normal de setpoints.
+   *
+   * Usado somente quando set_enabled_param_=true (parâmetro configurável).
+   * Fire-and-forget via AsyncParametersClient — não bloqueia o timer callback.
+   * Best-effort: loga warning se o serviço estiver indisponível.
+   *
+   * @param value  New value for `enabled` (false = stop setpoints, true = resume).
+   */
+  void setControllerEnabled(bool value)
+  {
+    if (!set_enabled_param_) {
+      return;
+    }
+    if (!param_client_) {
+      return;
+    }
+    if (!param_client_->service_is_ready()) {
+      RCLCPP_WARN(this->get_logger(),
+        "⚠️  Serviço de parâmetros de '%s' não disponível — continuando sem %s o enabled.",
+        controller_node_.c_str(), value ? "restaurar" : "desativar");
+      return;
+    }
+
+    // Fire-and-forget: não bloqueamos o timer callback aguardando a resposta.
+    param_client_->set_parameters({rclcpp::Parameter("enabled", value)});
+    RCLCPP_INFO(this->get_logger(),
+      "%s enabled=%s em '%s' (my_drone_controller, best-effort).",
+      value ? "🔓 Restaurando" : "🔒 Desativando",
       value ? "true" : "false",
       controller_node_.c_str());
   }
@@ -274,11 +330,16 @@ private:
         RCLCPP_INFO(this->get_logger(), "   yaw_rate=%.3f rad/s  duração=%.1fs",
           yaw_rate_signed_, duration_);
 
-        // Sinaliza ao controller para congelar FSM (ele mesmo captura a posição hold)
+        // Sinaliza ao my_drone_controller (drone_controller_completo) para congelar FSM
+        // (override_active=true) e parar publicação de setpoints (enabled=false),
+        // dando controle exclusivo ao yaw_override durante o giro.
         if (auto_disable_controller_) {
           RCLCPP_INFO(this->get_logger(),
-            "🔒 Ativando override em '%s' antes do giro (override_active=true)...", controller_node_.c_str());
+            "🔒 Integrando com my_drone_controller '%s': ativando override_active=true e %s...",
+            controller_node_.c_str(),
+            set_enabled_param_ ? "enabled=false" : "(set_enabled_param=false, enabled não alterado)");
           setControllerOverride(true);
+          setControllerEnabled(false);
           controller_disabled_ = true;
         }
 
@@ -311,10 +372,15 @@ private:
         // Desativa override de yaw: controller retoma FSM normal
         publishYawOverride(false, 0.0, 0.0f);
         if ((this->now() - finish_time_).seconds() >= 1.0) {
-          // Desativa override no controller antes de encerrar
+          // Restaura parâmetros do my_drone_controller (drone_controller_completo):
+          //   enabled=true          → retoma publicação de setpoints
+          //   override_active=false → retoma FSM normal
           if (auto_disable_controller_ && controller_disabled_) {
             RCLCPP_INFO(this->get_logger(),
-              "🔓 Desativando override em '%s' após o giro (override_active=false)...", controller_node_.c_str());
+              "🔓 Restaurando my_drone_controller '%s': override_active=false e %s...",
+              controller_node_.c_str(),
+              set_enabled_param_ ? "enabled=true" : "(set_enabled_param=false, enabled não alterado)");
+            setControllerEnabled(true);
             setControllerOverride(false);
             controller_disabled_ = false;
           }
@@ -370,10 +436,14 @@ private:
   double hz_{20.0};
   bool   ccw_{true};
 
-  // Nome do nó controlador a ter o override ativado/desativado durante o giro
+  // Nome do nó controlador (my_drone_controller / drone_controller_completo)
+  // a ter override_active e enabled alterados durante o giro
   std::string controller_node_;
-  // Se true, ativa override_active no controller antes do giro e desativa ao terminar
+  // Se true, seta override_active=true/false no drone_controller_completo durante/após o giro
   bool auto_disable_controller_{true};
+  // Se true, também seta enabled=false/true no drone_controller_completo durante/após o giro
+  // (evita competição de setpoints; requer auto_disable_controller=true para ter efeito)
+  bool set_enabled_param_{true};
   // Flag para rastrear se o override foi ativado por este nó (para desativar no destrutor)
   bool controller_disabled_{false};
   // Se true, chama rclcpp::shutdown() após o giro; se false, retorna a WAIT_OFFBOARD_AND_ARMED
