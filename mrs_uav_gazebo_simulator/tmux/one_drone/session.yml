@@ -67,7 +67,8 @@ windows:
           waitForPX4; sleep 2
           source ~/ros2_ws/install/setup.bash
           ros2 run drone_custom_control lpv_mpc_drone_node --ros-args \
-         
+            -p uav_name:=$UAV_NAME \
+            -p auto_arm_handoff:=true
 
   # ── 7. Hover supervisor (persistent setpoint streamer) ─────────────────────
   - hover_supervisor:
@@ -84,6 +85,9 @@ windows:
             -p airborne_z_threshold:=0.3 \
             -p auto_latch_min_altitude:=1.0 \
             -p auto_latch_hold_time:=1.0 \
+            -p auto_disable_when_mpc_active:=true \
+            -p handoff_timeout:=0.5 \
+            -p auto_reenable:=true \
             2>&1 | tee -a /tmp/drone_logs/hover_supervisor_node_$(date +%Y%m%d_%H%M%S).log
 
   # ── 8. Debug console ───────────────────────────────────────────────────────

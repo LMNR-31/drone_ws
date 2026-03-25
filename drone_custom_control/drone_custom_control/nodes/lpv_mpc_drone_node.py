@@ -815,6 +815,12 @@ class LPVMPC_Drone(Node):
         self.declare_parameter('saturation_recovery_max_ref_speed_xy', 0.2)
         self.declare_parameter('saturation_recovery_freeze_xy',       False)
 
+        # When True, transition WAIT_WP -> HOVER automatically if the drone is
+        # already armed+OFFBOARD (e.g. hover_supervisor handed off control).
+        # Publishes hold-at-current-position attitude setpoints immediately,
+        # which also triggers hover_supervisor's auto_disable_when_mpc_active.
+        self.declare_parameter('auto_arm_handoff', True)
+
         uav = self.get_parameter('uav_name').value
 
         self.enabled            = bool(self.get_parameter('enabled').value)
@@ -851,6 +857,8 @@ class LPVMPC_Drone(Node):
             self.get_parameter('saturation_recovery_max_ref_speed_xy').value)
         self.saturation_recovery_freeze_xy = bool(
             self.get_parameter('saturation_recovery_freeze_xy').value)
+        self.auto_arm_handoff = bool(
+            self.get_parameter('auto_arm_handoff').value)
 
         if self.landing_mode not in (0, 1):
             self.get_logger().warn(
@@ -1076,6 +1084,10 @@ class LPVMPC_Drone(Node):
                 self.saturation_recovery_freeze_xy = bool(p.value)
                 self.get_logger().info(
                     f'saturation_recovery_freeze_xy -> {self.saturation_recovery_freeze_xy}')
+            elif p.name == 'auto_arm_handoff':
+                self.auto_arm_handoff = bool(p.value)
+                self.get_logger().info(
+                    f'auto_arm_handoff -> {self.auto_arm_handoff}')
         return result
 
     # ── Subscribers callbacks ────────────────────────────────────────────────
@@ -1697,6 +1709,32 @@ class LPVMPC_Drone(Node):
             self._state_standby_ground(now)
 
     def _state_wait_wp(self):
+        # Auto-handoff: when the drone is already armed+OFFBOARD (e.g. handed
+        # off from hover_supervisor_node), latch current position and enter
+        # HOVER so the MPC publishes attitude setpoints immediately.
+        # This prevents a gap in setpoints (which would drop OFFBOARD mode)
+        # and triggers hover_supervisor's auto_disable_when_mpc_active.
+        if (self.auto_arm_handoff
+                and self.odom_received
+                and self.mavros_state.armed
+                and self.mavros_state.mode == 'OFFBOARD'):
+            # states[6]=x, states[7]=y, states[8]=z (ENU)
+            cur_x, cur_y, cur_z = (
+                float(self.states[6]),
+                float(self.states[7]),
+                float(self.states[8]),
+            )
+            self.last_waypoint_goal = [cur_x, cur_y, cur_z]
+            self.offboard_activated   = True
+            self.activation_confirmed = True
+            self._warmup_counter      = self._WARMUP_CYCLES
+            self.state_voo            = self._HOVER
+            self.get_logger().info(
+                f'WAIT_WP: armed+OFFBOARD detected – latching current position '
+                f'({cur_x:.3f},{cur_y:.3f},{cur_z:.3f}) and entering HOVER '
+                f'(auto_arm_handoff from hover_supervisor_node)')
+            return
+
         if self._cycle_count % 1000 == 0:
             self.get_logger().info(
                 'WAIT_WP: waiting for waypoint command',
