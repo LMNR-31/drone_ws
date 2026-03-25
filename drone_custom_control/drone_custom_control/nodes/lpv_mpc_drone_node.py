@@ -795,9 +795,11 @@ class LPVMPC_Drone(Node):
         self.declare_parameter('max_ref_speed_xy',      2.0)
         self.declare_parameter('max_ref_speed_z',       1.0)
         self.declare_parameter('use_velocity_body',     True)
-        self.declare_parameter('max_vz_accel',          3.0)
-        self.declare_parameter('max_tilt_rad',          0.5)
-        self.declare_parameter('thrust_warn_threshold', 0.95)
+        self.declare_parameter('max_vz_accel',             3.0)
+        self.declare_parameter('max_tilt_rad',             0.5)
+        self.declare_parameter('thrust_warn_threshold',    0.95)
+        self.declare_parameter('min_takeoff_alt_rel',      1.8)
+        self.declare_parameter('takeoff_complete_hold_time', 0.5)
 
         uav = self.get_parameter('uav_name').value
 
@@ -816,6 +818,10 @@ class LPVMPC_Drone(Node):
         self.max_vz_accel = float(self.get_parameter('max_vz_accel').value)
         self.max_tilt_rad = float(self.get_parameter('max_tilt_rad').value)
         self.thrust_warn_threshold = float(self.get_parameter('thrust_warn_threshold').value)
+        self.min_takeoff_alt_rel = float(
+            self.get_parameter('min_takeoff_alt_rel').value)
+        self.takeoff_complete_hold_time = float(
+            self.get_parameter('takeoff_complete_hold_time').value)
 
         if self.landing_mode not in (0, 1):
             self.get_logger().warn(
@@ -882,6 +888,12 @@ class LPVMPC_Drone(Node):
 
         # Altitude reference in uav1/map frame (captures ground z on first odom)
         self._z0_map = None
+        # True once armed (latches _z0_map; cleared when disarmed back in WAIT_WP)
+        self._z0_map_locked = False
+        # Track previous armed state to detect arming transitions
+        self._prev_armed = False
+        # Timestamp when takeoff completion conditions were first continuously met
+        self._takeoff_cond_start: float = None  # seconds (ROS time)
 
         # State-5 recovery interval timer
         self._state5_recovery_time = self.get_clock().now()
@@ -1003,7 +1015,26 @@ class LPVMPC_Drone(Node):
 
     # ── Subscribers callbacks ────────────────────────────────────────────────
     def _state_cb(self, msg):
+        prev = self._prev_armed
         self.mavros_state = msg
+        armed_now = msg.armed
+
+        # Detect disarm: if was armed and now disarmed while in WAIT_WP, unlock z0
+        if prev and not armed_now and self.state_voo == self._WAIT_WP:
+            if self._z0_map_locked:
+                self.get_logger().info(
+                    f'Disarmed in WAIT_WP -> unlocking _z0_map '
+                    f'(state={self.state_voo} armed={armed_now} z0={self._z0_map})')
+            self._z0_map_locked = False
+
+        # Detect first arm transition: lock _z0_map once vehicle arms
+        if not prev and armed_now and not self._z0_map_locked:
+            self._z0_map_locked = True
+            self.get_logger().info(
+                f'Armed! Latching _z0_map={self._z0_map} '
+                f'(state={self.state_voo} armed={armed_now})')
+
+        self._prev_armed = armed_now
 
     def _vel_body_cb(self, msg):
         """Cache the latest body-frame linear velocity from MAVROS."""
@@ -1029,12 +1060,21 @@ class LPVMPC_Drone(Node):
             2*(qw[3]*qw[2] + qw[0]*qw[1]),
             1 - 2*(qw[1]**2 + qw[2]**2))
 
-        # Capture ground reference on first message (or when on ground in WAIT_WP)
+        # Capture ground reference: never update when locked (vehicle is armed)
         if self._z0_map is None:
             self._z0_map = float(p.z)
-        elif (self.state_voo == self._WAIT_WP
+            self.get_logger().warn(
+                f'_z0_map initial capture: z0={self._z0_map:.4f} '
+                f'state={self.state_voo} armed={self.mavros_state.armed}')
+        elif (not self._z0_map_locked
+              and self.state_voo == self._WAIT_WP
               and not self.mavros_state.armed):
+            old = self._z0_map
             self._z0_map = float(p.z)
+            if abs(self._z0_map - old) > 0.01:
+                self.get_logger().warn(
+                    f'_z0_map recaptured: {old:.4f} -> {self._z0_map:.4f} '
+                    f'state={self.state_voo} armed={self.mavros_state.armed}')
 
         # Select u,v,w source:
         # Preferred: MAVROS velocity_body (already in body frame, no conversion needed)
@@ -1215,9 +1255,10 @@ class LPVMPC_Drone(Node):
             self.get_logger().warn('_initiate_takeoff: no waypoint goal set')
             return
 
-        self.landing_active  = False
-        self.state_voo       = self._TAKEOFF
-        self.takeoff_counter = 0
+        self.landing_active      = False
+        self.state_voo           = self._TAKEOFF
+        self.takeoff_counter     = 0
+        self._takeoff_cond_start = None
 
         # If already OFFBOARD+ARM (e.g. from state 5), skip warmup
         if (self.mavros_state.armed
@@ -1617,27 +1658,58 @@ class LPVMPC_Drone(Node):
                 f'(z_enu={goal[2]:.2f})  '
                 f'({goal[0]:.2f}, {goal[1]:.2f})')
 
-        if self.takeoff_counter % 100 == 0:
-            alt_rel = self._alt_rel()
+        alt_rel    = self._alt_rel()
+        goal_alt_rel = self._alt_rel(goal[2])
+
+        # Condition A: within hover_alt_margin of goal
+        cond_a = alt_rel >= goal_alt_rel - self.hover_alt_margin
+        # Condition B: minimum safe altitude reached
+        cond_b = alt_rel >= self.min_takeoff_alt_rel
+
+        # Throttled debug log every 2 s (200 cycles at 100 Hz)
+        if self.takeoff_counter % 200 == 0:
+            self.get_logger().info(
+                f'Takeoff: alt_target={self._enu_to_alt(goal[2]):.1f}m  '
+                f'alt_rel={alt_rel:.2f}m  '
+                f'z_enu={self.states[8]:.2f}m  '
+                f'goal_alt_rel={goal_alt_rel:.2f}m  '
+                f'_z0_map={self._z0_map}  '
+                f'condA={cond_a} condB={cond_b}  '
+                f't={self.takeoff_counter / 100:.1f}s')
+        elif self.takeoff_counter % 100 == 0:
             self.get_logger().info(
                 f'Takeoff: alt_target={self._enu_to_alt(goal[2]):.1f}m  '
                 f'alt_rel={alt_rel:.2f}m  '
                 f'z_enu={self.states[8]:.2f}m  '
                 f't={self.takeoff_counter / 100:.1f}s')
 
-        # Arrival check: use relative altitude vs commanded goal altitude (above ground)
-        # goal[2] is ENU z of the target; goal altitude above ground = goal[2] - _z0_map
-        if self._alt_rel() >= self._alt_rel(goal[2]) - self.hover_alt_margin:
-            self.get_logger().info(
-                f'Takeoff complete! '
-                f'alt_rel={self._alt_rel():.2f}m -> HOVER')
-            self.takeoff_counter = 0
-            self.state_voo       = self._HOVER
-            # Immediately activate pending trajectory
-            if self.trajectory_waypoints:
+        # Arrival check: Condition C – A and B must both hold continuously
+        # for takeoff_complete_hold_time seconds before switching to HOVER.
+        now_sec = now.nanoseconds / 1e9
+        if cond_a and cond_b:
+            if self._takeoff_cond_start is None:
+                self._takeoff_cond_start = now_sec
+            held = now_sec - self._takeoff_cond_start
+            if held >= self.takeoff_complete_hold_time:
                 self.get_logger().info(
-                    'Pending trajectory found -> TRAJECTORY')
-                self.state_voo = self._TRAJECTORY
+                    f'Takeoff complete! '
+                    f'alt_rel={alt_rel:.2f}m '
+                    f'(held {held:.2f}s) -> HOVER')
+                self.takeoff_counter     = 0
+                self._takeoff_cond_start = None
+                self.state_voo           = self._HOVER
+                # Immediately activate pending trajectory
+                if self.trajectory_waypoints:
+                    self.get_logger().info(
+                        'Pending trajectory found -> TRAJECTORY')
+                    self.state_voo = self._TRAJECTORY
+        else:
+            # Reset hold timer if conditions are not continuously met
+            if self._takeoff_cond_start is not None:
+                self.get_logger().info(
+                    f'Takeoff hold reset: alt_rel={alt_rel:.2f}m '
+                    f'condA={cond_a} condB={cond_b}')
+            self._takeoff_cond_start = None
 
     def _state_hover(self, now):
         """State 2: hold goal position, wait for trajectory."""
