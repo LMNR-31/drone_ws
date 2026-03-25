@@ -792,14 +792,28 @@ class LPVMPC_Drone(Node):
         self.declare_parameter('waypoint_duration',     5.0)
         self.declare_parameter('activation_timeout',    10.0)
         self.declare_parameter('landing_timeout',       5.0)
-        self.declare_parameter('max_ref_speed_xy',      2.0)
-        self.declare_parameter('max_ref_speed_z',       1.0)
+        self.declare_parameter('max_ref_speed_xy',      0.5)
+        self.declare_parameter('max_ref_speed_z',       0.5)
         self.declare_parameter('use_velocity_body',     True)
-        self.declare_parameter('max_vz_accel',             3.0)
-        self.declare_parameter('max_tilt_rad',             0.5)
+        self.declare_parameter('max_vz_accel',             1.5)
+        self.declare_parameter('max_tilt_rad',             0.25)
         self.declare_parameter('thrust_warn_threshold',    0.95)
-        self.declare_parameter('min_takeoff_alt_rel',      1.8)
-        self.declare_parameter('takeoff_complete_hold_time', 0.5)
+        self.declare_parameter('min_takeoff_alt_rel',      0.8)
+        self.declare_parameter('takeoff_complete_hold_time', 1.5)
+
+        # ── Thrust saturation recovery ────────────────────────────────────────
+        # When thrust stays at or above saturation_thrust_threshold for
+        # saturation_recovery_cycles consecutive MPC steps (~0.1 s each),
+        # the node enters a recovery phase for saturation_recovery_duration
+        # MPC steps.  During recovery tilt is clamped tighter and XY speed is
+        # reduced so the vehicle prioritises vertical stability.
+        self.declare_parameter('saturation_recovery_enabled',         True)
+        self.declare_parameter('saturation_thrust_threshold',         0.95)
+        self.declare_parameter('saturation_recovery_cycles',          5)
+        self.declare_parameter('saturation_recovery_duration',        10)
+        self.declare_parameter('saturation_recovery_max_tilt_rad',    0.15)
+        self.declare_parameter('saturation_recovery_max_ref_speed_xy', 0.2)
+        self.declare_parameter('saturation_recovery_freeze_xy',       False)
 
         uav = self.get_parameter('uav_name').value
 
@@ -822,6 +836,21 @@ class LPVMPC_Drone(Node):
             self.get_parameter('min_takeoff_alt_rel').value)
         self.takeoff_complete_hold_time = float(
             self.get_parameter('takeoff_complete_hold_time').value)
+
+        self.saturation_recovery_enabled = bool(
+            self.get_parameter('saturation_recovery_enabled').value)
+        self.saturation_thrust_threshold = float(
+            self.get_parameter('saturation_thrust_threshold').value)
+        self.saturation_recovery_cycles = int(
+            self.get_parameter('saturation_recovery_cycles').value)
+        self.saturation_recovery_duration = int(
+            self.get_parameter('saturation_recovery_duration').value)
+        self.saturation_recovery_max_tilt_rad = float(
+            self.get_parameter('saturation_recovery_max_tilt_rad').value)
+        self.saturation_recovery_max_ref_speed_xy = float(
+            self.get_parameter('saturation_recovery_max_ref_speed_xy').value)
+        self.saturation_recovery_freeze_xy = bool(
+            self.get_parameter('saturation_recovery_freeze_xy').value)
 
         if self.landing_mode not in (0, 1):
             self.get_logger().warn(
@@ -897,6 +926,12 @@ class LPVMPC_Drone(Node):
 
         # State-5 recovery interval timer
         self._state5_recovery_time = self.get_clock().now()
+
+        # Thrust saturation recovery counters
+        # _sat_counter: consecutive MPC steps where thrust >= saturation_thrust_threshold
+        # _sat_recovery_remaining: MPC steps remaining in the current recovery phase
+        self._sat_counter = 0
+        self._sat_recovery_remaining = 0
 
         # Decimation: run MPC every N cycles (N = Ts / 0.01 = 10)
         self._mpc_decimation = max(1, round(self.Ts / 0.01))
@@ -1011,6 +1046,36 @@ class LPVMPC_Drone(Node):
                 self.thrust_warn_threshold = float(p.value)
                 self.get_logger().info(
                     f'thrust_warn_threshold -> {self.thrust_warn_threshold:.3f}')
+            elif p.name == 'saturation_recovery_enabled':
+                self.saturation_recovery_enabled = bool(p.value)
+                self.get_logger().info(
+                    f'saturation_recovery_enabled -> {self.saturation_recovery_enabled}')
+            elif p.name == 'saturation_thrust_threshold':
+                self.saturation_thrust_threshold = float(p.value)
+                self.get_logger().info(
+                    f'saturation_thrust_threshold -> {self.saturation_thrust_threshold:.3f}')
+            elif p.name == 'saturation_recovery_cycles':
+                self.saturation_recovery_cycles = int(p.value)
+                self.get_logger().info(
+                    f'saturation_recovery_cycles -> {self.saturation_recovery_cycles}')
+            elif p.name == 'saturation_recovery_duration':
+                self.saturation_recovery_duration = int(p.value)
+                self.get_logger().info(
+                    f'saturation_recovery_duration -> {self.saturation_recovery_duration}')
+            elif p.name == 'saturation_recovery_max_tilt_rad':
+                self.saturation_recovery_max_tilt_rad = float(p.value)
+                self.get_logger().info(
+                    f'saturation_recovery_max_tilt_rad -> '
+                    f'{self.saturation_recovery_max_tilt_rad:.3f} rad')
+            elif p.name == 'saturation_recovery_max_ref_speed_xy':
+                self.saturation_recovery_max_ref_speed_xy = float(p.value)
+                self.get_logger().info(
+                    f'saturation_recovery_max_ref_speed_xy -> '
+                    f'{self.saturation_recovery_max_ref_speed_xy:.2f} m/s')
+            elif p.name == 'saturation_recovery_freeze_xy':
+                self.saturation_recovery_freeze_xy = bool(p.value)
+                self.get_logger().info(
+                    f'saturation_recovery_freeze_xy -> {self.saturation_recovery_freeze_xy}')
         return result
 
     # ── Subscribers callbacks ────────────────────────────────────────────────
@@ -1323,22 +1388,34 @@ class LPVMPC_Drone(Node):
     def _goal_ref(self, gx, gy, gz):
         """Return MPC reference tuple for holding/approaching a fixed goal.
 
+        During thrust saturation recovery the XY speed limit is tightened and,
+        when ``saturation_recovery_freeze_xy`` is true, the XY goal is frozen to
+        the current position so no lateral acceleration is demanded.
+
         Returns
         -------
         (X_ref, Xd, Xdd, Y_ref, Yd, Ydd, Z_ref, Zd, Zdd, psi_ref)
         """
         x_now = self.states[6]
         y_now = self.states[7]
-        z_now = self.states[8]
+
+        in_recovery = (self.saturation_recovery_enabled
+                       and self._sat_recovery_remaining > 0)
+
+        # Freeze XY goal to current position during recovery if configured
+        if in_recovery and self.saturation_recovery_freeze_xy:
+            gx, gy = x_now, y_now
 
         dx = gx - x_now
         dy = gy - y_now
-        dz = gz - z_now
+        dz = gz - self.states[8]
 
         dist_xy = float(np.sqrt(dx**2 + dy**2))
+        xy_speed_limit = (self.saturation_recovery_max_ref_speed_xy
+                          if in_recovery else self.max_ref_speed_xy)
         if dist_xy > 0.01:
-            vx = (dx / dist_xy) * min(dist_xy, self.max_ref_speed_xy)
-            vy = (dy / dist_xy) * min(dist_xy, self.max_ref_speed_xy)
+            vx = (dx / dist_xy) * min(dist_xy, xy_speed_limit)
+            vy = (dy / dist_xy) * min(dist_xy, xy_speed_limit)
         else:
             vx = vy = 0.0
 
@@ -1392,9 +1469,13 @@ class LPVMPC_Drone(Node):
         dz = wp[2] - self.states[8]
 
         dist_xy = float(np.sqrt(dx**2 + dy**2))
+        in_recovery = (self.saturation_recovery_enabled
+                       and self._sat_recovery_remaining > 0)
+        xy_speed_limit = (self.saturation_recovery_max_ref_speed_xy
+                          if in_recovery else self.max_ref_speed_xy)
         if dist_xy > 0.01:
-            vx = (dx / dist_xy) * min(dist_xy, self.max_ref_speed_xy)
-            vy = (dy / dist_xy) * min(dist_xy, self.max_ref_speed_xy)
+            vx = (dx / dist_xy) * min(dist_xy, xy_speed_limit)
+            vy = (dy / dist_xy) * min(dist_xy, xy_speed_limit)
         else:
             vx = vy = 0.0
 
@@ -1467,6 +1548,12 @@ class LPVMPC_Drone(Node):
         """
         X_ref, Xd, Xdd, Y_ref, Yd, Ydd, Z_ref, Zd, Zdd, psi_ref = ref
 
+        # Determine tilt limit: tighter during saturation recovery
+        in_recovery = (self.saturation_recovery_enabled
+                       and self._sat_recovery_remaining > 0)
+        tilt_limit = (self.saturation_recovery_max_tilt_rad
+                      if in_recovery else self.max_tilt_rad)
+
         # Internal convention is ENU (z up). pos_controller expects ENU too.
         # No z-axis sign conversion needed.
         states_enu = self.states
@@ -1487,8 +1574,8 @@ class LPVMPC_Drone(Node):
             phi_ref   = -phi_ref
             theta_ref = -theta_ref
 
-        phi_ref   = float(np.clip(phi_ref,   -self.max_tilt_rad, self.max_tilt_rad))
-        theta_ref = float(np.clip(theta_ref, -self.max_tilt_rad, self.max_tilt_rad))
+        phi_ref   = float(np.clip(phi_ref,   -tilt_limit, tilt_limit))
+        theta_ref = float(np.clip(theta_ref, -tilt_limit, tilt_limit))
         psi_ref   = float(psi_ref)
 
         ref_signals  = np.array([phi_ref, theta_ref, psi_ref])
@@ -1546,6 +1633,31 @@ class LPVMPC_Drone(Node):
                 f'Z_ref={Z_ref:.2f} phi_ref={phi_ref:.3f}rad '
                 f'theta_ref={theta_ref:.3f}rad',
                 throttle_duration_sec=2.0)
+
+        # ── Saturation recovery state machine ─────────────────────────────────
+        # Counts consecutive MPC steps (≈0.1 s each at 10 Hz) where thrust
+        # exceeds saturation_thrust_threshold, then enters a recovery phase.
+        if self.saturation_recovery_enabled:
+            if att.thrust >= self.saturation_thrust_threshold:
+                self._sat_counter += 1
+            else:
+                self._sat_counter = 0
+
+            if self._sat_recovery_remaining > 0:
+                self._sat_recovery_remaining -= 1
+                if self._sat_recovery_remaining == 0:
+                    self.get_logger().warn(
+                        'SATURATION RECOVERY: exiting recovery; '
+                        'normal tilt/XY limits restored')
+            elif self._sat_counter >= self.saturation_recovery_cycles:
+                self._sat_recovery_remaining = self.saturation_recovery_duration
+                self._sat_counter = 0
+                self.get_logger().warn(
+                    f'SATURATION RECOVERY: entering recovery for '
+                    f'{self.saturation_recovery_duration} MPC steps '
+                    f'(tilt_limit={self.saturation_recovery_max_tilt_rad:.2f}rad '
+                    f'xy_speed={self.saturation_recovery_max_ref_speed_xy:.2f}m/s'
+                    f'{" freeze_xy=true" if self.saturation_recovery_freeze_xy else ""})')
 
         return att
 
