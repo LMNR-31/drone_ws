@@ -10,9 +10,18 @@ Services
 --------
 ~/takeoff  (std_srvs/Trigger)
     Latch current XY from odom, climb to ``takeoff_altitude``, then hold.
+    Returns an error (success=False) when the node is disabled.
 
 ~/latch_here  (std_srvs/Trigger)
     Latch current XYZ from odom immediately and hold at that position.
+    Returns an error (success=False) when the node is disabled.
+
+~/set_enabled  (std_srvs/SetBool)
+    Enable or disable setpoint publishing.
+    data=true  => enabled: publish setpoints and manage hover/takeoff normally.
+    data=false => disabled: stop publishing setpoints so another controller
+                  (e.g. lpv_mpc_drone_node) can command the drone.
+    Subscriptions and state tracking remain active in both modes.
 
 Topics subscribed
 -----------------
@@ -50,6 +59,21 @@ Auto-takeoff on start
 When ``auto_takeoff_on_start`` is ``true`` (default ``false``) the node
 triggers the same flow as calling ``~/takeoff`` automatically after receiving
 the first odometry message, without requiring an external service call.
+
+Enable/disable handoff
+----------------------
+Call ``~/set_enabled`` with ``data=false`` to stop setpoint publishing so that
+another controller (e.g. ``lpv_mpc_drone_node``) can take over attitude/position
+control.  Call with ``data=true`` to resume.  All subscriptions and state
+tracking remain active while disabled.
+
+Auto-disable when MPC active
+-----------------------------
+When ``auto_disable_when_mpc_active`` is ``true`` (default ``false``) the node
+subscribes to ``/{uav}/mavros/setpoint_raw/attitude`` and disables publishing
+automatically whenever a message is received within the last ``handoff_timeout``
+seconds.  Set ``auto_reenable`` to ``true`` to re-enable automatically when
+no attitude messages have been received for ``handoff_timeout`` seconds.
 """
 
 import rclpy
@@ -58,10 +82,10 @@ from rclpy.duration import Duration
 
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry
-from mavros_msgs.msg import State
+from mavros_msgs.msg import AttitudeTarget, State
 from mavros_msgs.srv import SetMode, CommandBool
 from std_msgs.msg import Float64
-from std_srvs.srv import Trigger
+from std_srvs.srv import SetBool, Trigger
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +142,9 @@ class HoverSupervisorNode(Node):
         self.declare_parameter('auto_latch_min_altitude', 1.0)
         self.declare_parameter('auto_latch_hold_time', 1.0)
         self.declare_parameter('auto_latch_requires_takeoff_altitude', False)
+        self.declare_parameter('auto_disable_when_mpc_active', False)
+        self.declare_parameter('handoff_timeout', 0.5)
+        self.declare_parameter('auto_reenable', False)
 
         uav = self.get_parameter('uav_name').get_parameter_value().string_value
         self._uav = uav
@@ -177,6 +204,17 @@ class HoverSupervisorNode(Node):
                 'auto_latch_requires_takeoff_altitude'
             ).get_parameter_value().bool_value
         )
+        self._auto_disable_mpc = (
+            self.get_parameter(
+                'auto_disable_when_mpc_active'
+            ).get_parameter_value().bool_value
+        )
+        self._handoff_timeout = (
+            self.get_parameter('handoff_timeout').get_parameter_value().double_value
+        )
+        self._auto_reenable = (
+            self.get_parameter('auto_reenable').get_parameter_value().bool_value
+        )
 
         # ---- FSM state ---------------------------------------------------
         self._fsm = _IDLE
@@ -210,6 +248,13 @@ class HoverSupervisorNode(Node):
         self._auto_latch_cond_since: float = -1.0
         self._last_auto_latch_warn: float = 0.0
 
+        # ---- enable/disable state ----------------------------------------
+        # When False, no setpoints are published (hands off control to MPC).
+        self._enabled: bool = True
+
+        # ---- auto-disable: last attitude target message time (seconds) ------
+        self._last_attitude_time: float = -1.0
+
         # ---- setpoint (always publishing) --------------------------------
         self._setpoint = PoseStamped()
         self._setpoint.header.frame_id = self._frame_id
@@ -236,6 +281,13 @@ class HoverSupervisorNode(Node):
         self._alt_sub = self.create_subscription(
             Float64, '~/set_altitude', self._set_altitude_cb, 10
         )
+        # Attitude target subscription (for auto-disable when MPC is active)
+        self._attitude_sub = self.create_subscription(
+            AttitudeTarget,
+            f'/{uav}/mavros/setpoint_raw/attitude',
+            self._attitude_target_cb,
+            10,
+        )
 
         # ---- service clients ---------------------------------------------
         self._mode_client = self.create_client(SetMode, f'/{uav}/mavros/set_mode')
@@ -250,6 +302,9 @@ class HoverSupervisorNode(Node):
         self._latch_srv = self.create_service(
             Trigger, '~/latch_here', self._handle_latch_here
         )
+        self._set_enabled_srv = self.create_service(
+            SetBool, '~/set_enabled', self._handle_set_enabled
+        )
 
         # ---- main timer --------------------------------------------------
         self._timer = self.create_timer(1.0 / rate_hz, self._tick)
@@ -262,7 +317,10 @@ class HoverSupervisorNode(Node):
             f'auto_latch_min_alt={self._auto_latch_min_altitude}m '
             f'auto_latch_hold_time={self._auto_latch_hold_time}s '
             f'airborne_z_thr={self._airborne_z_threshold}m '
-            f'auto_takeoff={self._auto_takeoff_on_start}'
+            f'auto_takeoff={self._auto_takeoff_on_start} '
+            f'auto_disable_mpc={self._auto_disable_mpc} '
+            f'handoff_timeout={self._handoff_timeout}s '
+            f'auto_reenable={self._auto_reenable}'
         )
         if self._auto_latch_airborne:
             self.get_logger().warn(
@@ -300,6 +358,10 @@ class HoverSupervisorNode(Node):
         self._target_z = msg.data
         self.get_logger().info(f'set_altitude: target_z -> {msg.data:.3f}m')
 
+    def _attitude_target_cb(self, msg: AttitudeTarget) -> None:
+        """Record arrival time of attitude target messages from another controller."""
+        self._last_attitude_time = self.get_clock().now().nanoseconds * 1e-9
+
     # ------------------------------------------------------------------
     # Service handlers
     # ------------------------------------------------------------------
@@ -308,6 +370,14 @@ class HoverSupervisorNode(Node):
         self, request: Trigger.Request, response: Trigger.Response
     ) -> Trigger.Response:
         """Handle ~/takeoff: latch XY from odom and climb to takeoff_altitude."""
+        if not self._enabled:
+            response.success = False
+            response.message = (
+                'hover_supervisor is disabled; call ~/set_enabled with data=true first'
+            )
+            self.get_logger().warn(response.message)
+            return response
+
         if self._fsm not in (_IDLE, _HOVER):
             state_name = _STATE_NAMES.get(self._fsm, str(self._fsm))
             response.success = False
@@ -352,6 +422,14 @@ class HoverSupervisorNode(Node):
         self, request: Trigger.Request, response: Trigger.Response
     ) -> Trigger.Response:
         """Handle ~/latch_here: latch current XYZ from odom and hover."""
+        if not self._enabled:
+            response.success = False
+            response.message = (
+                'hover_supervisor is disabled; call ~/set_enabled with data=true first'
+            )
+            self.get_logger().warn(response.message)
+            return response
+
         if not self._odom_received:
             response.success = False
             response.message = 'Odom not yet received; cannot latch position'
@@ -372,6 +450,35 @@ class HoverSupervisorNode(Node):
         self.get_logger().info(f'latch_here: {response.message}')
         return response
 
+    def _handle_set_enabled(
+        self, request: SetBool.Request, response: SetBool.Response
+    ) -> SetBool.Response:
+        """Handle ~/set_enabled: enable or disable setpoint publishing."""
+        new_state = bool(request.data)
+        if new_state == self._enabled:
+            response.success = True
+            response.message = (
+                f'hover_supervisor already {"enabled" if new_state else "disabled"}'
+            )
+            return response
+
+        self._enabled = new_state
+        if self._enabled:
+            self.get_logger().info(
+                'hover_supervisor ENABLED: resuming setpoint publishing'
+            )
+        else:
+            self.get_logger().warn(
+                'hover_supervisor DISABLED: stopped publishing setpoints '
+                '– another controller may now command the drone'
+            )
+
+        response.success = True
+        response.message = (
+            f'hover_supervisor {"enabled" if self._enabled else "disabled"}'
+        )
+        return response
+
     # ------------------------------------------------------------------
     # Main timer tick
     # ------------------------------------------------------------------
@@ -381,6 +488,26 @@ class HoverSupervisorNode(Node):
         # Publishing (0,0,0) before we know where the drone is could be unsafe.
         if not self._odom_received:
             return
+
+        # Auto-disable / auto-reenable based on attitude target messages from MPC.
+        if self._auto_disable_mpc:
+            now_s = self.get_clock().now().nanoseconds * 1e-9
+            mpc_active = (
+                self._last_attitude_time > 0.0
+                and (now_s - self._last_attitude_time) < self._handoff_timeout
+            )
+            if mpc_active and self._enabled:
+                self._enabled = False
+                self.get_logger().warn(
+                    'auto_disable_when_mpc_active: attitude target detected – '
+                    'hover_supervisor DISABLED (MPC is commanding)'
+                )
+            elif not mpc_active and not self._enabled and self._auto_reenable:
+                self._enabled = True
+                self.get_logger().info(
+                    'auto_reenable: no attitude target received for '
+                    f'{self._handoff_timeout:.2f}s – hover_supervisor ENABLED'
+                )
 
         # Apply rate-limited altitude step if z_step_per_tick > 0
         if self._z_step > 0.0:
@@ -395,10 +522,11 @@ class HoverSupervisorNode(Node):
         else:
             self._setpoint.pose.position.z = self._target_z
 
-        # Always publish setpoint to keep OFFBOARD mode alive
-        self._publish_setpoint()
+        # Only publish setpoint when enabled; when disabled yield control to MPC.
+        if self._enabled:
+            self._publish_setpoint()
 
-        # FSM dispatch
+        # FSM dispatch (subscriptions and state tracking run regardless of _enabled)
         if self._fsm == _IDLE:
             self._do_idle()
         elif self._fsm == _WARMUP:
@@ -625,7 +753,8 @@ class HoverSupervisorNode(Node):
             f'STATUS | FSM={state_name} '
             f'pos=({self._odom_x:.2f},{self._odom_y:.2f},{self._odom_z:.2f}) '
             f'setpoint_z={self._setpoint.pose.position.z:.2f} '
-            f'armed={self._mavros_state.armed} mode={self._mavros_state.mode}'
+            f'armed={self._mavros_state.armed} mode={self._mavros_state.mode} '
+            f'enabled={self._enabled}'
         )
 
     # ------------------------------------------------------------------

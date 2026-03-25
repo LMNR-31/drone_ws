@@ -101,6 +101,16 @@ windows:
           echo "║  ros2 topic pub /drone/waypoint ...      ║"
           echo "║  tail -f /tmp/drone_commands.log         ║"
           echo "║  tail -f /tmp/drone_logs/*.log           ║"
+          echo "╠══════════════════════════════════════════╣"
+          echo "║ Hover supervisor enable/disable:         ║"
+          echo "║  Disable (let MPC control):              ║"
+          echo "║   ros2 service call                      ║"
+          echo "║   /hover_supervisor_node/set_enabled     ║"
+          echo "║   std_srvs/srv/SetBool '{data: false}'   ║"
+          echo "║  Enable (resume hover hold):             ║"
+          echo "║   ros2 service call                      ║"
+          echo "║   /hover_supervisor_node/set_enabled     ║"
+          echo "║   std_srvs/srv/SetBool '{data: true}'    ║"
           echo "╚══════════════════════════════════════════╝"
           source ~/ros2_ws/install/setup.bash
           bash

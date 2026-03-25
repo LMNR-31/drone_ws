@@ -194,6 +194,9 @@ service call is desired.
 | `auto_latch_min_altitude` | `1.0` | Minimum `odom_z` (m) required before auto-latch is allowed; prevents latching during transient climb |
 | `auto_latch_hold_time` | `1.0` | Seconds all auto-latch conditions must be continuously true before latching (stability window) |
 | `auto_latch_requires_takeoff_altitude` | `false` | If `true`, also require `odom_z >= altitude_threshold` before auto-latching |
+| `auto_disable_when_mpc_active` | `false` | Automatically disable setpoint publishing when attitude-target messages are detected on `/{uav}/mavros/setpoint_raw/attitude` |
+| `handoff_timeout` | `0.5` | Seconds without attitude-target messages before considering MPC inactive (used by `auto_disable_when_mpc_active` and `auto_reenable`) |
+| `auto_reenable` | `false` | Re-enable setpoint publishing automatically after no attitude-target messages for `handoff_timeout` seconds |
 
 ### Topics
 
@@ -202,14 +205,16 @@ service call is desired.
 | Subscribe | `/{uav_name}/mavros/state` | `mavros_msgs/msg/State` |
 | Subscribe | `/{uav_name}/mavros/local_position/odom` | `nav_msgs/msg/Odometry` |
 | Subscribe | `~/set_altitude` | `std_msgs/msg/Float64` |
+| Subscribe | `/{uav_name}/mavros/setpoint_raw/attitude` | `mavros_msgs/msg/AttitudeTarget` (used by `auto_disable_when_mpc_active`) |
 | Publish | `/{uav_name}/mavros/setpoint_position/local` | `geometry_msgs/msg/PoseStamped` |
 
 ### Services offered
 
 | Service | Type | Description |
 |---|---|---|
-| `~/takeoff` | `std_srvs/Trigger` | Latch current XY, climb to `takeoff_altitude` |
-| `~/latch_here` | `std_srvs/Trigger` | Latch current XYZ and hover |
+| `~/takeoff` | `std_srvs/Trigger` | Latch current XY, climb to `takeoff_altitude`. Returns error if disabled. |
+| `~/latch_here` | `std_srvs/Trigger` | Latch current XYZ and hover. Returns error if disabled. |
+| `~/set_enabled` | `std_srvs/SetBool` | Enable (`data=true`) or disable (`data=false`) setpoint publishing. |
 
 ### Services called
 
@@ -250,6 +255,16 @@ ros2 topic pub --once /hover_supervisor_node/set_altitude std_msgs/msg/Float64 \
   "{data: 3.0}"
 ```
 
+Enable or disable setpoint publishing:
+
+```bash
+# Disable – stop publishing so MPC can take over
+ros2 service call /hover_supervisor_node/set_enabled std_srvs/srv/SetBool "{data: false}"
+
+# Re-enable – resume hover supervisor control
+ros2 service call /hover_supervisor_node/set_enabled std_srvs/srv/SetBool "{data: true}"
+```
+
 ### Recommended handoff sequence
 
 Use `hover_supervisor_node` as the persistent publisher and `mavros_takeoff_node`
@@ -278,6 +293,63 @@ ros2 run drone_custom_control mavros_takeoff_node --ros-args \
 ---
 
 #### Handoff to `lpv_mpc_drone_node`
+
+Recommended sequence using `~/set_enabled` for a clean handoff:
+
+1. Use `hover_supervisor_node` to take off and hold hover.
+2. Call `~/set_enabled false` before starting the MPC trajectory so the
+   supervisor stops publishing position setpoints.
+3. Start `lpv_mpc_drone_node` (or send waypoints to an already-running
+   instance). The drone is now controlled exclusively by the MPC.
+4. Call `~/set_enabled true` to resume hover supervisor control when MPC
+   finishes.
+
+```bash
+# Step 1 – supervisor takes off and holds hover
+ros2 run drone_custom_control hover_supervisor_node --ros-args \
+  -p uav_name:=uav1 \
+  -p auto_takeoff_on_start:=true \
+  -p takeoff_altitude:=2.0
+
+# Step 2 – disable supervisor before launching MPC
+ros2 service call /hover_supervisor_node/set_enabled std_srvs/srv/SetBool "{data: false}"
+
+# Step 3 – start MPC controller (now the only publisher)
+ros2 run drone_custom_control lpv_mpc_drone_node --ros-args \
+  -p uav_name:=uav1 \
+  -p use_velocity_body:=true \
+  -p max_vz_accel:=4.0 \
+  -p max_tilt_rad:=0.40
+
+# Step 4 – re-enable supervisor to resume hover
+ros2 service call /hover_supervisor_node/set_enabled std_srvs/srv/SetBool "{data: true}"
+```
+
+**Optional – automatic handoff using `auto_disable_when_mpc_active`:**
+
+When `auto_disable_when_mpc_active` is `true` the supervisor disables itself
+automatically as soon as it detects attitude-target messages from the MPC node,
+and can re-enable itself when the MPC goes silent (requires `auto_reenable:=true`):
+
+```bash
+ros2 run drone_custom_control hover_supervisor_node --ros-args \
+  -p uav_name:=uav1 \
+  -p auto_disable_when_mpc_active:=true \
+  -p handoff_timeout:=0.5 \
+  -p auto_reenable:=true
+```
+
+With this configuration the recommended sequence simplifies to:
+
+1. Start `hover_supervisor_node` with `auto_disable_when_mpc_active:=true`.
+2. Use the supervisor to take off and hold hover.
+3. Start `lpv_mpc_drone_node` – the supervisor disables itself automatically.
+4. Stop `lpv_mpc_drone_node` – the supervisor re-enables itself automatically
+   (if `auto_reenable:=true`).
+
+---
+
+#### Alternative: handoff via `mavros_takeoff_node`
 
 1. Start `mavros_takeoff_node` with
    `publish_waypoint_goal_on_success:=true`.
