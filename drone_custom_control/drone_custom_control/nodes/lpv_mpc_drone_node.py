@@ -14,7 +14,7 @@ import numpy as np
 from nav_msgs.msg import Odometry
 from mavros_msgs.msg import AttitudeTarget, State
 from mavros_msgs.srv import SetMode, CommandBool
-from geometry_msgs.msg import PoseArray, PoseStamped
+from geometry_msgs.msg import PoseArray, PoseStamped, TwistStamped
 from scipy.interpolate import CubicSpline
 
 class SupportFilesDrone:
@@ -791,6 +791,7 @@ class LPVMPC_Drone(Node):
         self.declare_parameter('landing_timeout',       5.0)
         self.declare_parameter('max_ref_speed_xy',      2.0)
         self.declare_parameter('max_ref_speed_z',       1.0)
+        self.declare_parameter('use_velocity_body',     True)
 
         uav = self.get_parameter('uav_name').value
 
@@ -805,6 +806,7 @@ class LPVMPC_Drone(Node):
         self.landing_timeout    = float(self.get_parameter('landing_timeout').value)
         self.max_ref_speed_xy   = float(self.get_parameter('max_ref_speed_xy').value)
         self.max_ref_speed_z    = float(self.get_parameter('max_ref_speed_z').value)
+        self.use_velocity_body  = bool(self.get_parameter('use_velocity_body').value)
 
         if self.landing_mode not in (0, 1):
             self.get_logger().warn(
@@ -865,6 +867,13 @@ class LPVMPC_Drone(Node):
         # Last published command (republished at 100 Hz between MPC steps)
         self._hold_cmd = None
 
+        # velocity_body subscriber storage (body-frame linear velocity)
+        self._vel_body = np.zeros(3)
+        self._vel_body_received = False
+
+        # Altitude reference in uav1/map frame (captures ground z on first odom)
+        self._z0_map = None
+
         # State-5 recovery interval timer
         self._state5_recovery_time = self.get_clock().now()
 
@@ -880,6 +889,10 @@ class LPVMPC_Drone(Node):
         qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
         self.create_subscription(
             Odometry, f'/{uav}/mavros/local_position/odom', self.odom_cb, qos)
+        self.create_subscription(
+            TwistStamped,
+            f'/{uav}/mavros/local_position/velocity_body',
+            self._vel_body_cb, qos)
         self.create_subscription(
             State, f'/{uav}/mavros/state', self._state_cb, 10)
         self.create_subscription(
@@ -918,6 +931,26 @@ class LPVMPC_Drone(Node):
         """Altitude magnitude for logs (ENU z is already positive-up)."""
         return max(0.0, float(z_enu))
 
+    def _alt_rel(self, z_enu: float = None) -> float:
+        """Altitude relative to captured ground reference (z0 in map frame).
+
+        Parameters
+        ----------
+        z_enu : float, optional
+            ENU z value to convert.  Defaults to ``states[8]`` (current altitude).
+
+        Returns
+        -------
+        float
+            ``z_enu - _z0_map`` when a ground reference is available,
+            otherwise ``z_enu`` unchanged.
+        """
+        if z_enu is None:
+            z_enu = float(self.states[8])
+        if self._z0_map is not None:
+            return float(z_enu) - self._z0_map
+        return float(z_enu)
+
     # ── Dynamic parameter callback ───────────────────────────────────────────
     def _on_params(self, params):
         result = SetParametersResult(successful=True)
@@ -953,6 +986,14 @@ class LPVMPC_Drone(Node):
     def _state_cb(self, msg):
         self.mavros_state = msg
 
+    def _vel_body_cb(self, msg):
+        """Cache the latest body-frame linear velocity from MAVROS."""
+        self._vel_body = np.array([
+            msg.twist.linear.x,
+            msg.twist.linear.y,
+            msg.twist.linear.z], dtype=float)
+        self._vel_body_received = True
+
     def odom_cb(self, msg):
         p = msg.pose.pose.position
         v = msg.twist.twist.linear
@@ -969,19 +1010,30 @@ class LPVMPC_Drone(Node):
             2*(qw[3]*qw[2] + qw[0]*qw[1]),
             1 - 2*(qw[1]**2 + qw[2]**2))
 
-        # MAVROS reports twist.twist.linear in the world/map frame (frame_id).
-        # pos_controller expects body-frame velocities [u, v, w].
-        # Build the body->world rotation matrix (ZYX order, same convention as
-        # the rest of this file) and apply its transpose to convert world->body.
-        cp, sp = np.cos(phi), np.sin(phi)
-        ct, st = np.cos(theta), np.sin(theta)
-        cs, ss = np.cos(psi), np.sin(psi)
-        R_x = np.array([[1, 0, 0], [0, cp, -sp], [0, sp, cp]])
-        R_y = np.array([[ct, 0, st], [0, 1, 0], [-st, 0, ct]])
-        R_z = np.array([[cs, -ss, 0], [ss, cs, 0], [0, 0, 1]])
-        R_body_to_world = np.matmul(R_z, np.matmul(R_y, R_x))
-        v_world = np.array([v.x, v.y, v.z])
-        u_b, v_b, w_b = np.matmul(R_body_to_world.T, v_world)
+        # Capture ground reference on first message (or when on ground in WAIT_WP)
+        if self._z0_map is None:
+            self._z0_map = float(p.z)
+        elif (self.state_voo == self._WAIT_WP
+              and not self.mavros_state.armed):
+            self._z0_map = float(p.z)
+
+        # Select u,v,w source:
+        # Preferred: MAVROS velocity_body (already in body frame, no conversion needed)
+        # Fallback:  rotate odom twist.linear (world frame) into body frame
+        if self.use_velocity_body and self._vel_body_received:
+            u_b, v_b, w_b = self._vel_body
+            vel_source = 'velocity_body'
+        else:
+            cp, sp = np.cos(phi), np.sin(phi)
+            ct, st = np.cos(theta), np.sin(theta)
+            cs, ss = np.cos(psi), np.sin(psi)
+            R_x = np.array([[1, 0, 0], [0, cp, -sp], [0, sp, cp]])
+            R_y = np.array([[ct, 0, st], [0, 1, 0], [-st, 0, ct]])
+            R_z = np.array([[cs, -ss, 0], [ss, cs, 0], [0, 0, 1]])
+            R_body_to_world = np.matmul(R_z, np.matmul(R_y, R_x))
+            v_world = np.array([v.x, v.y, v.z])
+            u_b, v_b, w_b = np.matmul(R_body_to_world.T, v_world)
+            vel_source = 'odom_twist(world->body)'
 
         self.states = np.array([
             u_b, v_b, w_b,
@@ -990,11 +1042,11 @@ class LPVMPC_Drone(Node):
             phi, theta, psi])
         self.odom_received = True
 
-        # Log frame ids once every 10 s to make the velocity-frame convention
-        # explicit and avoid future ambiguity.
+        # Throttled log: frame convention + velocity source (every ~10 s)
         self.get_logger().info(
             f"odom frames: frame_id={msg.header.frame_id!r} "
-            f"child_frame_id={msg.child_frame_id!r}",
+            f"child_frame_id={msg.child_frame_id!r} "
+            f"vel_src={vel_source}",
             throttle_duration_sec=10.0)
 
     def _waypoints_cb(self, msg):
@@ -1304,7 +1356,7 @@ class LPVMPC_Drone(Node):
                 f'TRAJECTORY WP[{idx}/{len(self.trajectory_waypoints)-1}] '
                 f'X={wp[0]:.2f} Y={wp[1]:.2f} z_enu={wp[2]:.2f} '
                 f'z_enu_real={self.states[8]:.2f} '
-                f'alt={self._enu_to_alt(self.states[8]):.2f}m {pct:.1f}%')
+                f'alt_rel={self._alt_rel():.2f}m {pct:.1f}%')
 
         # Check completion
         if elapsed >= total:
@@ -1539,17 +1591,19 @@ class LPVMPC_Drone(Node):
                 f'({goal[0]:.2f}, {goal[1]:.2f})')
 
         if self.takeoff_counter % 100 == 0:
+            alt_rel = self._alt_rel()
             self.get_logger().info(
                 f'Takeoff: alt_target={self._enu_to_alt(goal[2]):.1f}m  '
-                f'alt_real={self._enu_to_alt(self.states[8]):.2f}m  '
+                f'alt_rel={alt_rel:.2f}m  '
                 f'z_enu={self.states[8]:.2f}m  '
                 f't={self.takeoff_counter / 100:.1f}s')
 
-        # Arrival check (ENU: both states[8] and goal[2] are positive when airborne)
-        if self.states[8] >= goal[2] - self.hover_alt_margin:
+        # Arrival check: use relative altitude vs commanded goal altitude (above ground)
+        # goal[2] is ENU z of the target; goal altitude above ground = goal[2] - _z0_map
+        if self._alt_rel() >= self._alt_rel(goal[2]) - self.hover_alt_margin:
             self.get_logger().info(
                 f'Takeoff complete! '
-                f'alt={self._enu_to_alt(self.states[8]):.2f}m -> HOVER')
+                f'alt_rel={self._alt_rel():.2f}m -> HOVER')
             self.takeoff_counter = 0
             self.state_voo       = self._HOVER
             # Immediately activate pending trajectory
@@ -1568,10 +1622,11 @@ class LPVMPC_Drone(Node):
 
         if self._cycle_count % 500 == 0:
             gx, gy, gz = self.last_waypoint_goal
+            alt_rel = self._alt_rel()
             self.get_logger().info(
                 f'HOVER goal=({gx:.2f},{gy:.2f}) '
                 f'alt_target={self._enu_to_alt(gz):.2f}m z_enu_ref={gz:.2f} '
-                f'z_enu={self.states[8]:.2f} alt={self._enu_to_alt(self.states[8]):.2f}m',
+                f'z_enu={self.states[8]:.2f} alt_rel={alt_rel:.2f}m',
                 throttle_duration_sec=10.0)
 
         # Activate trajectory when one arrives
@@ -1581,12 +1636,12 @@ class LPVMPC_Drone(Node):
 
     def _state_trajectory(self, now):
         """State 3: discrete-waypoint trajectory execution."""
-        # Landing detection (ENU: z is positive when airborne, near 0 on ground)
-        z_enu = self.states[8]
-        if z_enu < self.land_z_threshold:
+        # Landing detection (relative altitude: near 0 when on ground)
+        alt_rel = self._alt_rel()
+        if alt_rel < self.land_z_threshold:
             self.get_logger().warn(
                 f'Landing detected during trajectory! '
-                f'z_enu={z_enu:.2f}m alt={self._enu_to_alt(z_enu):.2f}m')
+                f'z_enu={self.states[8]:.2f}m alt_rel={alt_rel:.2f}m')
             if self.last_waypoint_goal is not None:
                 self.ground_hold = [
                     self.last_waypoint_goal[0],
@@ -1718,7 +1773,7 @@ class LPVMPC_Drone(Node):
             self.get_logger().info(
                 f'FSM={sname}({self.state_voo}) '
                 f'pos=({self.states[6]:.2f},{self.states[7]:.2f}) '
-                f'z_enu={self.states[8]:.2f} alt={self._enu_to_alt(self.states[8]):.2f}m '
+                f'z_enu={self.states[8]:.2f} alt_rel={self._alt_rel():.2f}m '
                 f'goal=({ref_pos[0]:.2f},{ref_pos[1]:.2f}) '
                 f'z_enu_ref={ref_pos[2]:.2f} '
                 f'armed={self.mavros_state.armed} '
