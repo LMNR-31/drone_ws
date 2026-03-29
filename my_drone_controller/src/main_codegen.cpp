@@ -1881,6 +1881,28 @@ private:
 
             RCLCPP_WARN(this->get_logger(),
               "\n✅ POUSO CONCLUÍDO! Aguardando novo comando de waypoint para decolar novamente...\n");
+
+            // Resetar TODAS as flags para estado limpo
+            // CRUCIAL: offboard_activated_ DEVE ser false para próxima decolagem!
+            state_voo_ = 0;
+            pouso_em_andamento_ = false;
+            controlador_ativo_ = false;
+            trajectory_started_ = false;
+            pouso_start_time_set_ = false;
+            offboard_activated_ = false;
+            activation_confirmed_ = false;
+            takeoff_counter_ = 0;
+            trajectory_waypoints_.clear();
+            current_waypoint_idx_ = 0;
+            takeoff_cmd_id_.reset();
+            hover_cmd_id_.reset();
+            trajectory_cmd_id_.reset();
+            land_cmd_id_.reset();
+
+            // Log de verificação
+            RCLCPP_WARN(this->get_logger(), "🔍 DEBUG RESET EM ESTADO 4:");
+            RCLCPP_WARN(this->get_logger(), "   offboard_activated_=%d (deve ser 0)", offboard_activated_);
+            RCLCPP_WARN(this->get_logger(), "   state_voo_=%d (deve ser 0)", state_voo_);
           }
 
           return;
